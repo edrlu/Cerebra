@@ -337,13 +337,19 @@ def reference_stats(predictions: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 def build_response(predictions: np.ndarray, ref: tuple[np.ndarray, np.ndarray] | None = None) -> dict:
     """Summarise predicted surface responses over the four engagement families.
 
-    Within-video, signed, per-vertex baseline: each vertex is z-scored against
-    its OWN response over the clip, so a family trace reflects how far that
-    territory deviates from its baseline (50 = baseline, 100 = +ENGAGEMENT_Z_REF
-    SD, 0 = -ENGAGEMENT_Z_REF SD). Traces are parcel-balanced and placed on one
-    fixed 0..100 scale so the four families are directly comparable.
-    All four are weighted equally; `reliability` is reported but never weights the
-    score. Overall engagement is the equal-weighted mean of the four families.
+    Default (ref=None): within-video, signed, per-vertex baseline — each vertex
+    is z-scored against its OWN temporal mean/SD over this clip, so a family
+    trace reflects how far that territory deviates from its own baseline
+    (50 = baseline, 100 = +ENGAGEMENT_Z_REF SD, 0 = -ENGAGEMENT_Z_REF SD).
+
+    When ref=(mu, sd) is supplied (per-vertex arrays from a previous clip), each
+    vertex is z-scored against THAT reference instead of its own clip, making
+    the resulting engagement scores directly comparable to the original video.
+
+    Traces are parcel-balanced and placed on one fixed 0..100 scale so the four
+    families are directly comparable within a result. All four are weighted
+    equally; `reliability` is reported but never weights the score. Overall
+    engagement is the equal-weighted mean of the four families.
     """
     assert model is not None
     pred = np.asarray(predictions, dtype=np.float64)
