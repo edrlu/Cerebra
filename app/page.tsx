@@ -119,6 +119,26 @@ function createDemoForFile(file: File, scheme: ColorSchemeId): Analysis {
   ], duration, "demo", scheme);
 }
 
+const FAMILY_KEY_BY_SHORT: Record<string, string> = {
+  AUD: "auditory_engagement",
+  LANG: "language_message",
+  ATTN: "attention_salience",
+  VIS: "visual_motion",
+};
+
+// Linearly resample a per-frame series to exactly n points (the take is ~5
+// samples at 1 Hz; the graph segment may have a different frame count).
+function resampleTo(series: number[], n: number): number[] {
+  if (n <= 0) return [];
+  if (series.length === 0) return new Array(n).fill(0);
+  if (series.length === 1) return new Array(n).fill(series[0]);
+  return Array.from({ length: n }, (_, k) => {
+    const pos = n === 1 ? 0 : (k / (n - 1)) * (series.length - 1);
+    const lo = Math.floor(pos), hi = Math.ceil(pos), frac = pos - lo;
+    return series[lo] * (1 - frac) + series[hi] * frac;
+  });
+}
+
 function engagementScore(a: Analysis): number {
   const peaks = FAMILY_KEYS.map((k) => Math.max(0, ...(a.cognitiveSeries?.[k] ?? [0])));
   return Math.round(peaks.reduce((s, v) => s + v, 0) / peaks.length);
@@ -653,17 +673,52 @@ export default function Home() {
     }));
   }
 
+  // Replace [start,end] of the engagement graph with the chosen take's per-frame
+  // series (already z-scored vs the original, so it drops in on the same scale).
+  // Updates global, each region's values + mean score, and cognitiveSeries; the
+  // overall engagementScore() useMemo recomputes from the new analysis.
+  function spliceTakeIntoAnalysis(series: TakeSeries, start: number, end: number) {
+    setAnalysis((a) => {
+      const len = a.global.length;
+      if (!len || !a.duration) return a;
+      const i0 = Math.max(0, Math.round((start / a.duration) * (len - 1)));
+      const i1 = Math.min(len - 1, Math.round((end / a.duration) * (len - 1)));
+      const n = i1 - i0 + 1;
+      if (n <= 0) return a;
+      const spliceInto = (orig: number[], take: number[]) => {
+        const next = orig.slice();
+        const rs = resampleTo(take, n);
+        for (let k = 0; k < n; k++) next[i0 + k] = rs[k];
+        return next;
+      };
+      const global = spliceInto(a.global, series.global);
+      const cognitiveSeries: Record<string, number[]> = { ...(a.cognitiveSeries ?? {}) };
+      const regions = a.regions.map((r) => {
+        const takeVals = series[r.short as keyof TakeSeries];
+        if (!Array.isArray(takeVals)) return r;
+        const values = spliceInto(r.values, takeVals);
+        const fk = FAMILY_KEY_BY_SHORT[r.short];
+        if (fk) cognitiveSeries[fk] = values;
+        const score = Math.round((values.reduce((s, x) => s + x, 0) / values.length) * 10) / 10;
+        return { ...r, values, score };
+      });
+      return { ...a, global, regions, cognitiveSeries };
+    });
+  }
+
   // Adopt one chosen take: its final.mp4 is the full source with that take spliced
   // in place, so we promote it to the active editor video and clear the batch.
   async function chooseVariant(key: string, i: number) {
     const v = regenJobs[key]?.variants[i];
     if (!v?.downloadUrl) return;
+    const series = v.series;
     const [start, end] = key.split("-").map(Number);
     const slot = `${formatTime(start)}–${formatTime(end)}`;
     setVariantPicker(null);
     try {
+      if (series) spliceTakeIntoAnalysis(series, start, end);
       await replacePreviewWithRegeneratedVideo(v.downloadUrl, { start, end }, key);
-      logUpsert(`regen_${key}_t${i}`, { title: `Regenerate ${slot} · take ${i + 1}`, detail: "Applied in place · ready to play", status: "done", href: v.downloadUrl });
+      logUpsert(`regen_${key}_t${i}`, { title: `Regenerate ${slot} · take ${i + 1}`, detail: "Applied in place · graph updated · ready to play", status: "done", href: v.downloadUrl });
     } catch (error) {
       logUpsert(`regen_${key}_t${i}`, { title: `Regenerate ${slot} · take ${i + 1}`, detail: error instanceof Error ? error.message : "Couldn't load the regenerated video", status: "error" });
     }
