@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Cerebra — TRIBE v2 video response explorer",
-  description: "Explore population-average cortical response predictions from video with Meta TRIBE v2.",
+  title: "percept — brain-response explorer for video",
+  description: "Generate an ad, see how the population-average brain responds with Meta TRIBE v2, and refine the weak moments.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

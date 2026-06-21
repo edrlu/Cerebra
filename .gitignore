@@ -15,7 +15,7 @@
 
 # next.js
 /.next/
-/.next-dev-*/
+/.next-*/
 # /downloads/
 # /out/
 
@@ -52,7 +52,7 @@ yarn-error.log*
 # Local TRIBE v2 runtime
 /.venv/
 /.tribev2-worker*.log
-/.regen-worker*.log
+/.regen-worker*
 /.cerebra-settings.json
 /worker/.cache/
 

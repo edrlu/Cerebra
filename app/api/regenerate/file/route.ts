@@ -33,7 +33,7 @@ export async function GET(request: Request) {
   try {
     const data = await readFile(path.join(jobDir(id), name));
     const headers: Record<string, string> = { "content-type": type, "cache-control": "no-store" };
-    if (name === "final.mp4") headers["content-disposition"] = `attachment; filename="cerebra_regenerated.mp4"`;
+    if (name === "final.mp4") headers["content-disposition"] = `attachment; filename="percept_regenerated.mp4"`;
     if (name.endsWith(".log")) headers["content-disposition"] = `inline; filename="${name}"`;
     return new Response(new Uint8Array(data), { headers });
   } catch {

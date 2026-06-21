@@ -2,13 +2,13 @@
 
 import { Fragment, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 
-// Stage 1 of the Cerebra loop. Input a brief (voice or text) → the built-in RAG
+// Stage 1 of the percept loop. Input a brief (voice or text) → the built-in RAG
 // optimizer returns the assembled Seedance 2.0 payload (SYSTEM + retrieval +
 // Pika skill). Stage 2 sends the optimized creative to Pika's
 // Seedance provider, then plays the returned render directly in the phone panel.
 //
 // This renders inside the workspace as the "Studio" tab, styled to match the
-// Sample-clip report (cerebra surfaces, DM Mono labels, the active scheme's
+// Sample-clip report (percept surfaces, mono labels, the active scheme's
 // accent) rather than the original standalone agency theme.
 
 type Retrieved = {
@@ -326,7 +326,7 @@ export function Studio() {
           <span className="studio-eyebrow"><i /> RESEARCH-BACKED · REDIS RAG · REALISTIC SHORT-FORM</span>
           <h1>Brief to broadcast, <em>engineered.</em></h1>
           <p>
-            Speak or type a brief. Cerebra uses Redis-backed context and proven ad patterns to
+            Speak or type a brief. percept uses Redis-backed context and proven ad patterns to
             engineer the exact payload your video model needs — system prompt,
             evidence, and the Seedance 2.0 generation skill, assembled.
           </p>

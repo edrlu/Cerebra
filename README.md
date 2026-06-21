@@ -1,16 +1,16 @@
-# Cerebra
+# percept
 
 **An interactive explorer for population-average cortical-response predictions from video.**
 
-Cerebra turns an uploaded video into a time-scrubbable view of Meta's [TRIBE v2](https://huggingface.co/facebook/tribev2) cortical-response predictions. It pairs an anatomical WebGL cortex with frame-level response charts, cortical proxy summaries, and a compact video timeline — and closes the loop by feeding those neuro-signals back into a Redis-native engine that generates and continuously improves short-form video ads.
+percept turns an uploaded video into a time-scrubbable view of Meta's [TRIBE v2](https://huggingface.co/facebook/tribev2) cortical-response predictions. It pairs an anatomical WebGL cortex with frame-level response charts, cortical proxy summaries, and a compact video timeline — and closes the loop by feeding those neuro-signals back into a Redis-native engine that generates and continuously improves short-form video ads.
 
 ---
 
-# 🔴 Redis is the brain of Cerebra
+# 🔴 Redis is the brain of percept
 
-> **Submission for "Best Use of Redis."** Redis is not a cache we bolted on. It is the **entire memory, retrieval, and learning substrate** of Cerebra — the connective tissue of a closed-loop, self-improving creative engine. Pull Redis out and there is no product: no grounding, no memory, no learning, no video delivery.
+> **Submission for "Best Use of Redis."** Redis is not a cache we bolted on. It is the **entire memory, retrieval, and learning substrate** of percept — the connective tissue of a closed-loop, self-improving creative engine. Pull Redis out and there is no product: no grounding, no memory, no learning, no video delivery.
 
-Cerebra uses Redis as a **real-time context engine** across **four Redis vector indexes**, **a reward-weighted property graph**, **per-session conversation memory**, **a semantic LLM cache**, and **a binary video store** — exercising hashes, sets, sorted sets, lists, RedisVL vector search, hybrid tag-filtered search, ranking queries, and atomic reinforcement counters. One database does the work most stacks split across Pinecone + Postgres + Neo4j + a blob store + Redis.
+percept uses Redis as a **real-time context engine** across **four Redis vector indexes**, **a reward-weighted property graph**, **per-session conversation memory**, **a semantic LLM cache**, and **a binary video store** — exercising hashes, sets, sorted sets, lists, RedisVL vector search, hybrid tag-filtered search, ranking queries, and atomic reinforcement counters. One database does the work most stacks split across Pinecone + Postgres + Neo4j + a blob store + Redis.
 
 ### The whole stack on one engine
 
@@ -29,7 +29,7 @@ Cerebra uses Redis as a **real-time context engine** across **four Redis vector 
 
 ## 1 · Retrieval-Augmented Generation, grounded in Redis Vector Search
 
-Every ad Cerebra generates is grounded in a **research-backed corpus of proven advertising science** (attention, memory, peak-end, brand distinctiveness, short-form structure, model-specific craft) stored as **59+ vectors** in the RedisVL index `cerebra_ad_knowledge`.
+Every ad percept generates is grounded in a **research-backed corpus of proven advertising science** (attention, memory, peak-end, brand distinctiveness, short-form structure, model-specific craft) stored as **59+ vectors** in the RedisVL index `cerebra_ad_knowledge`.
 
 - **Query is embedded, not keyword-matched.** The brief, product, and industry are embedded with `sentence-transformers/all-MiniLM-L6-v2` (384-dim) and run through a RedisVL `VectorQuery` — **cosine** distance, **flat** index, top-k — `pipeline/redis_store.py › AdKnowledgeStore.search()`.
 - **Hybrid retrieval.** Industry is applied as a RedisVL `Tag` filter (`Tag("industry") == [industry, "general"]`) so retrieval stays on-topic while still surfacing universal principles.
@@ -42,14 +42,14 @@ brief ─► embed (384-d) ─► Redis VectorQuery (cosine + tag filter) ─►
 
 ## 2 · Semantic Caching — meaning, not strings
 
-Opus optimization is slow and expensive. Cerebra fronts it with a **semantic cache** (`pipeline/redis_store.py › PromptCache`, index `cerebra_prompt_cache_verified_rag_v4`): the brief is embedded and matched against prior briefs by **cosine distance under a 0.12 threshold**. A semantically similar brief — even reworded — returns the cached, fully-assembled creative **without touching the LLM**.
+Opus optimization is slow and expensive. percept fronts it with a **semantic cache** (`pipeline/redis_store.py › PromptCache`, index `cerebra_prompt_cache_verified_rag_v4`): the brief is embedded and matched against prior briefs by **cosine distance under a 0.12 threshold**. A semantically similar brief — even reworded — returns the cached, fully-assembled creative **without touching the LLM**.
 
 - **Measured in our live demo: ~40–77s (fresh Opus call) → ~1s (cache hit).**
 - Cache keys are **generation-profile-aware** (model, resolution, duration, aspect) so a cached prompt can never leak across incompatible render settings.
 
 ## 3 · Conversation Memory — a creative session that remembers
 
-Cerebra is iterative: a brief becomes a creative, a render, a critique, a re-optimization. Redis gives that loop a memory (`pipeline/redis_store.py › SessionMemory`).
+percept is iterative: a brief becomes a creative, a render, a critique, a re-optimization. Redis gives that loop a memory (`pipeline/redis_store.py › SessionMemory`).
 
 - Each turn is `RPUSH`ed to a **per-session list** `cerebra:session:{id}`, **capped** and given a **24h TTL** so sessions self-expire.
 - Prior turns are replayed into Opus's context ("CONVERSATION SO FAR…"), so refinements build on history instead of starting cold.
@@ -66,7 +66,7 @@ Stage 2 renders 1080p audio-video through Seedance 2.0. Redis is the delivery la
 
 ## 🧩 Two Redis-native MCP plugins
 
-We packaged Cerebra's most novel Redis work as **two installable MCP servers** — so any agent (Claude included) can use Redis as a graph + vision substrate.
+We packaged percept's most novel Redis work as **two installable MCP servers** — so any agent (Claude included) can use Redis as a graph + vision substrate.
 
 ### Plugin 1 — **Percept Context**: GraphRAG on Redis
 
@@ -95,7 +95,7 @@ Turns any video into **searchable moments** in Redis.
 
 ## Why this is the Best Use of Redis
 
-Cerebra is a **closed neuro-optimized loop** and **Redis is every link in it**:
+percept is a **closed neuro-optimized loop** and **Redis is every link in it**:
 
 ```
 brief ─► Redis Vector RAG (ad science) ─► Opus creative ─► Seedance render (stored in Redis)
@@ -135,7 +135,7 @@ redis-cli FT.INFO cerebra_prompt_cache_verified_rag_v4 | grep num_docs
 
 ## How it works
 
-With the local worker running, Cerebra sends an uploaded video to `facebook/tribev2`. The model extracts video, audio, and language features and returns predicted average-subject fMRI-style responses on the fsaverage5 cortical mesh. The worker then aggregates the surface output over four manually defined display regions for the browser.
+With the local worker running, percept sends an uploaded video to `facebook/tribev2`. The model extracts video, audio, and language features and returns predicted average-subject fMRI-style responses on the fsaverage5 cortical mesh. The worker then aggregates the surface output over four manually defined display regions for the browser.
 
 The interface also works without the worker as a clearly labelled visual preview using synthetic data.
 
@@ -183,9 +183,9 @@ Then set `TRIBEV2_API_URL=http://localhost:8000` in `.env.local` and restart the
 
 ## Scientific scope
 
-TRIBE v2 predicts **population-average cortical responses** to naturalistic stimuli. Cerebra's four surface regions are manually defined display proxies. They are not direct measurements of emotion, reward, desire, intent, self-relevance, memory encoding, subcortical activity, an individual viewer's mental state, or health.
+TRIBE v2 predicts **population-average cortical responses** to naturalistic stimuli. percept's four surface regions are manually defined display proxies. They are not direct measurements of emotion, reward, desire, intent, self-relevance, memory encoding, subcortical activity, an individual viewer's mental state, or health.
 
-Cerebra is a research/visualization interface—not an fMRI scanner, diagnostic tool, or behavioral truth machine.
+percept is a research/visualization interface—not an fMRI scanner, diagnostic tool, or behavioral truth machine.
 
 ## Development checks
 
