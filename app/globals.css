@@ -359,7 +359,19 @@ body { background:var(--app-bg); }.app-shell { background:var(--app-bg); }
   .left-rail { overflow-y:auto; overflow-x:hidden; min-height:0; scrollbar-width:thin; scrollbar-color:var(--line-strong) transparent; }
   .left-rail .upload-panel { flex:0 0 auto; }
   .left-rail .dropzone { height:174px; min-height:0; flex:none; }
-  .left-rail .details-panel { flex:0 0 auto; margin-top:0; }
+  /* Keep the run metadata anchored to the lower edge of the analysis area,
+     flush with the Timeline below it. Segments continue to occupy the space above. */
+  .left-rail .details-panel { flex:0 0 auto; order:2; margin-top:auto; }
   .left-rail::-webkit-scrollbar { width:8px; }
   .left-rail::-webkit-scrollbar-thumb { background:var(--line-strong); border-radius:4px; }
+
+  /* Let Stimulus consume the otherwise-empty lower portion of its dashboard
+     cell, ending exactly at the Timeline instead of stopping at a fixed height. */
+  .system-insights { grid-template-rows:auto auto minmax(0,1fr); overflow:hidden; }
+  .system-insights .signal-panel { grid-column:1; grid-row:1; }
+  .system-insights .upload-panel { grid-column:1; grid-row:3; display:flex; min-height:0; height:100%; flex-direction:column; }
+  .system-insights .upload-panel .panel-head { flex:none; }
+  .system-insights .upload-panel .dropzone { height:auto; min-height:0; flex:1; margin:7px 8px; }
+  .system-insights .upload-panel .file-row { margin:0 8px 7px; }
+  .system-insights .cognitive-panel { grid-column:1; grid-row:2; }
 }

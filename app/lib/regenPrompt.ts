@@ -1,13 +1,13 @@
 /**
  * The prompt-engineer meta-prompt. Step 1 of regeneration: this is sent to
- * Claude (via MCP, agent-in-the-loop) together with the cut's START frame and
- * END frame. Claude returns an optimal `prompt`, which is then fed to Pika's
+ * Codex (via MCP, agent-in-the-loop) together with the cut's START frame and
+ * END frame. Codex returns an optimal `prompt`, which is then fed to Pika's
  * generate_video (Seedance, image_to_video) in step 2.
  *
  * Seedance takes no negative_prompt / quality_mode / prompt_adherence, so any
  * "avoid" guidance is folded into the positive prompt and quality is set via
  * `resolution` instead. Kept here so the job manifest and the UI can surface the
- * exact instruction handed to Claude alongside frame_start.png + frame_end.png.
+ * exact instruction handed to Codex alongside frame_start.png + frame_end.png.
  */
 export const REGEN_META_PROMPT = `You are a prompt engineer for Pika's generate_video tool using the Seedance provider in image_to_video mode, where a START frame (image) animates/morphs into an END frame (end_image). I will give you two images: frame 1 (start) and frame 2 (end). Your job is to output the optimal prompt.
 

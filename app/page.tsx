@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, DragEvent, type PointerEvent as ReactPointerEvent, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { ChangeEvent, DragEvent, type PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { CorticalBrain } from "./components/CorticalBrain";
 import { COLOR_SCHEMES, DEFAULT_COLOR_SCHEME, type ColorSchemeId } from "./color-schemes";
 
@@ -33,7 +33,7 @@ type RegenStatus = "extracting" | "awaiting_generation" | "merging" | "done" | "
 type RegenJobState = { status: RegenStatus; jobId?: string; startFrame?: string; endFrame?: string; downloadUrl?: string; error?: string };
 const REGEN_LABEL: Record<RegenStatus, string> = {
   extracting: "Extracting frames…",
-  awaiting_generation: "Generating via Claude + Pika…",
+  awaiting_generation: "Generating via Codex + Pika…",
   merging: "Merging clip…",
   done: "Regenerated",
   error: "Failed",
@@ -349,6 +349,32 @@ export default function Home() {
   }
   function removeCut(index: number) { setCuts((prev) => prev.filter((_, i) => i !== index)); }
 
+  // A completed job is already a complete, server-merged video. Promote that
+  // file to the active editor source so playback includes the new AI clip,
+  // rather than merely offering it as a download beside the original source.
+  const replacePreviewWithRegeneratedVideo = useCallback(async (downloadUrl: string, seg: { start: number; end: number }, jobId: string) => {
+    const response = await fetch(downloadUrl, { cache: "no-store" });
+    if (!response.ok) throw new Error("Couldn't load the regenerated video");
+    const blob = await response.blob();
+    const baseName = file?.name.replace(/\.[^.]+$/, "") || "video";
+    const mergedFile = new File([blob], `${baseName}-regenerated.mp4`, { type: "video/mp4" });
+
+    setPlaying(false);
+    setFile(mergedFile);
+    setVideoUrl(URL.createObjectURL(mergedFile));
+    setVideoDuration(0);
+    videoDurationRef.current = 0;
+    setTime(seg.start);
+    setDraftCut(null);
+    setCuts((prev) => prev.filter((cut) => Math.abs(cut.start - seg.start) > 1e-3 || Math.abs(cut.end - seg.end) > 1e-3));
+    setSpliceMode(false);
+    setRegenJobs((prev) => {
+      const next = { ...prev };
+      delete next[jobId];
+      return next;
+    });
+  }, [file]);
+
   // Drag an existing cut band along the timeline to reposition it (keeping its
   // length). A press that doesn't move past a small threshold is treated as a
   // click and removes the cut instead, so both gestures live on the same band.
@@ -387,7 +413,7 @@ export default function Home() {
 
   // Step 1 of regeneration: ship the source + cut timing to the backend, which
   // extracts the slot's start/end frames and queues a job. The agent then runs
-  // the Claude prompt → Pika generate_video → /complete merge out-of-band.
+  // the Codex prompt → Pika generate_video → /complete merge out-of-band.
   async function regenerate(seg: { start: number; end: number }) {
     if (!file) return;
     const key = `${seg.start}-${seg.end}`;
@@ -408,7 +434,7 @@ export default function Home() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Frame extraction failed");
       setRegenJobs((j) => ({ ...j, [key]: { status: "awaiting_generation", jobId: data.jobId, startFrame: data.startFrame, endFrame: data.endFrame } }));
-      logUpsert(logId, { title: `Regenerate ${slot}`, detail: `Frames ready · generating ${durationSec}s clip via Claude + Pika (Seedance 2.0)`, status: "active", bar: true });
+      logUpsert(logId, { title: `Regenerate ${slot}`, detail: `Frames ready · generating ${durationSec}s clip via Codex + Pika (Seedance 2.0)`, status: "active", bar: true });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed";
       setRegenJobs((j) => ({ ...j, [key]: { status: "error", error: message } }));
@@ -433,14 +459,22 @@ export default function Home() {
             const slot = key.split("-").map((s) => formatTime(Number(s))).join("–");
             const logId = `regen_${key}`;
             if (job.status === "merging") logUpsert(logId, { title: `Regenerate ${slot}`, detail: "Clip generated · merging into the video", status: "active", bar: true });
-            else if (job.status === "done") logUpsert(logId, { title: `Regenerate ${slot}`, detail: "Regenerated in place · ready to download", status: "done", href: downloadUrl });
+            else if (job.status === "done") {
+              try {
+                await replacePreviewWithRegeneratedVideo(downloadUrl, { start: Number(key.split("-")[0]), end: Number(key.split("-")[1]) }, key);
+                logUpsert(logId, { title: `Regenerate ${slot}`, detail: "Regenerated in place · ready to play", status: "done", href: downloadUrl });
+              } catch (error) {
+                const message = error instanceof Error ? error.message : "Couldn't load the regenerated video";
+                logUpsert(logId, { title: `Regenerate ${slot}`, detail: message, status: "error" });
+              }
+            }
             else if (job.status === "error") logUpsert(logId, { title: `Regenerate ${slot}`, detail: job.error || "Merge failed", status: "error" });
           }
         } catch { /* keep polling */ }
       }
     }, 2500);
     return () => clearInterval(id);
-  }, [regenJobs]);
+  }, [regenJobs, replacePreviewWithRegeneratedVideo]);
 
   const totalCut = cuts.reduce((sum, c) => sum + (c.end - c.start), 0);
   const trimmedDuration = Math.max(0, analysis.duration - totalCut);
@@ -511,22 +545,6 @@ export default function Home() {
 
     <section className="workspace-grid">
       <aside className="left-rail">
-        <div className="panel upload-panel">
-          <div className="panel-head"><span>01 / STIMULUS</span><span className={file ? "ready-tag" : ""}>{file ? "READY" : "VIDEO"}</span></div>
-          <div className={`dropzone ${dragging ? "dragging" : ""}`} onDrop={onDrop} onDragOver={(e) => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onClick={() => inputRef.current?.click()}>
-            <input ref={inputRef} onChange={onFileChange} accept="video/mp4,video/quicktime,video/webm" type="file" hidden/>
-            {videoUrl ? <video ref={videoRef} className="video-preview" src={videoUrl} muted playsInline onLoadedMetadata={(e) => {
-              const d = e.currentTarget.duration || 0;
-              setVideoDuration(d);
-              videoDurationRef.current = d;
-              // Patch the duration onto whatever analysis is already showing
-              // (covers metadata arriving after prediction has resolved).
-              if (d && Number.isFinite(d)) setAnalysis((a) => (Math.abs(a.duration - d) < 0.05 ? a : { ...a, duration: d, peak: { ...a.peak, time: a.duration ? (a.peak.time / a.duration) * d : 0 } }));
-            }}/> : <><div className="upload-orb"><Icon name="upload" size={22}/></div><strong>Drop a video here</strong><small>MP4, MOV, or WebM · up to 1 GB</small></>}
-            {videoUrl && <span className="replace-label"><Icon name="upload" size={14}/> Replace</span>}
-          </div>
-          {file && <div className="file-row"><span className="file-kind">{(file.name.split(".").pop() || "MP4").toUpperCase().slice(0, 4)}</span><span className="file-name">{file.name}</span><span className="file-size">{(file.size / 1024 / 1024).toFixed(1)} MB</span></div>}
-        </div>
         <div className="panel details-panel"><div className="panel-head"><span>RUN DETAILS</span><button onClick={reset} aria-label="Reset"><Icon name="reset" size={16}/></button></div><dl><div><dt>Model</dt><dd>facebook/tribev2</dd></div><div><dt>Surface</dt><dd>fsaverage5</dd></div><div><dt>Resolution</dt><dd>0.5 s / frame</dd></div><div><dt>Readout</dt><dd>Population average</dd></div></dl></div>
         {videoUrl && <div className="panel segments-panel"><div className="panel-head"><span>04 / SEGMENTS TO REGENERATE</span>{segments.length > 0 && <span className="segments-count">{segments.length}</span>}</div>
           {segments.length === 0
@@ -567,6 +585,22 @@ export default function Home() {
         </div>
         <div className="system-insights">
           <div className="panel signal-panel"><div className="signal-title"><div><span className="eyebrow">SYSTEM SIGNAL</span><strong style={{ color: active.color }}>{active.name} <span>●</span></strong></div><span className="signal-number">{(active.values[currentIndex] ?? 0).toFixed(0)}</span></div><div className="circuitry"><span>CIRCUITRY</span><strong>{activeFamily.anatomy}</strong><p>{activeFamily.impact}</p></div><svg className="mini-chart" viewBox="0 0 260 56" preserveAspectRatio="none"><path d="M0 16H260M0 38H260" className="chart-grid"/><path d={linePath(active.values, 260, 52)} fill="none" stroke={active.color} strokeWidth="2.5"/><line x1={playhead * 260} x2={playhead * 260} y1="0" y2="56" className="time-line"/></svg></div>
+          <div className="panel upload-panel">
+            <div className="panel-head"><span>01 / STIMULUS</span><span className={file ? "ready-tag" : ""}>{file ? "READY" : "VIDEO"}</span></div>
+            <div className={`dropzone ${dragging ? "dragging" : ""}`} onDrop={onDrop} onDragOver={(e) => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onClick={() => inputRef.current?.click()}>
+              <input ref={inputRef} onChange={onFileChange} accept="video/mp4,video/quicktime,video/webm" type="file" hidden/>
+              {videoUrl ? <video ref={videoRef} className="video-preview" src={videoUrl} muted playsInline onLoadedMetadata={(e) => {
+                const d = e.currentTarget.duration || 0;
+                setVideoDuration(d);
+                videoDurationRef.current = d;
+                // Patch the duration onto whatever analysis is already showing
+                // (covers metadata arriving after prediction has resolved).
+                if (d && Number.isFinite(d)) setAnalysis((a) => (Math.abs(a.duration - d) < 0.05 ? a : { ...a, duration: d, peak: { ...a.peak, time: a.duration ? (a.peak.time / a.duration) * d : 0 } }));
+              }}/> : <><div className="upload-orb"><Icon name="upload" size={22}/></div><strong>Drop a video here</strong><small>MP4, MOV, or WebM · up to 1 GB</small></>}
+              {videoUrl && <span className="replace-label"><Icon name="upload" size={14}/> Replace</span>}
+            </div>
+            {file && <div className="file-row"><span className="file-kind">{(file.name.split(".").pop() || "MP4").toUpperCase().slice(0, 4)}</span><span className="file-name">{file.name}</span><span className="file-size">{(file.size / 1024 / 1024).toFixed(1)} MB</span></div>}
+          </div>
           <div className="panel cognitive-panel"><div className="panel-head"><span>CORTICAL PROXY BREAKDOWN</span></div>{families.map((f) => { const peak = Math.max(0, ...(analysis.cognitiveSeries?.[f.key] ?? [0])); return <div className="cue-row" key={f.key}><span>{f.name}</span><div><i style={{ width: `${peak}%`, background: f.color }}/></div><b>{Math.round(peak)}</b></div>; })}<div className="breakdown-log" role="note" aria-label="Model interpretation notes"><div className="log-stamps"><span><b>MODEL</b> TRIBE v2</span><span><b>READOUT</b> CORTICAL SURFACE</span><span className="caution-stamp"><b>LIMIT</b> PROXIES ONLY</span></div><p className="log-note">Display-only cortical summaries · no emotion, intent, memory, or subcortical-state measurement.</p></div></div>
         </div>
         <div className="panel chat-panel"><div className="panel-head"><span>ASK CEREBRA</span><span className="log-count">{logs.length ? `${logs.length} EVENT${logs.length > 1 ? "S" : ""}` : "ACTIVITY"}</span></div>

@@ -11,7 +11,7 @@
  * sat in `awaiting_generation` forever.
  *
  * This worker closes the loop: it watches regen/<id>/job.json for queued jobs
- * and, for each one, spawns a headless `claude` (which already has the pika MCP
+ * and, for each one, spawns a headless `codex exec` (which already has the Pika MCP
  * connected) to perform the generation + merge handoff. The job's status is
  * left as `awaiting_generation` while the agent works — a `.claimed` lock file
  * (not a status change) prevents double-processing — so the browser's existing
@@ -93,21 +93,20 @@ function buildPrompt(job, dir) {
 function runAgent(job, dir) {
   return new Promise((resolve) => {
     const args = [
-      "-p", buildPrompt(job, dir),
-      "--add-dir", ROOT,
-      "--allowedTools",
-      "Read,Bash,mcp__pika__generate_video,mcp__pika__task_status,mcp__pika__upload_asset,mcp__pika__create_upload_return,mcp__pika__complete_upload_asset",
-      "--dangerously-skip-permissions",
+      "exec",
+      "--cd", ROOT,
+      "--dangerously-bypass-approvals-and-sandbox",
     ];
     if (MODEL) args.push("--model", MODEL);
+    args.push(buildPrompt(job, dir));
 
     log(`job ${job.id}: launching generation agent`);
-    const child = spawn("claude", args, { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"], env: process.env });
+    const child = spawn("codex", args, { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"], env: process.env });
     let tail = "";
     const onData = (d) => { tail = (tail + d.toString()).slice(-2000); };
     child.stdout.on("data", onData);
     child.stderr.on("data", onData);
-    child.on("error", (err) => { log(`job ${job.id}: failed to spawn claude:`, err.message); resolve({ ok: false, reason: err.message }); });
+    child.on("error", (err) => { log(`job ${job.id}: failed to spawn Codex:`, err.message); resolve({ ok: false, reason: err.message }); });
     child.on("exit", (code) => resolve({ ok: code === 0 && /REGEN_DONE/.test(tail), reason: tail.trim().split("\n").pop() || `exit ${code}` }));
   });
 }
@@ -163,7 +162,6 @@ async function tick() {
 
 async function main() {
   log(`watching ${REGEN_DIR} → ${APP_URL} (concurrency ${MAX_CONCURRENT}, poll ${POLL_MS}ms)`);
-  // eslint-disable-next-line no-constant-condition
   while (true) {
     await tick();
     await new Promise((r) => setTimeout(r, POLL_MS));

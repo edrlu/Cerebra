@@ -4,16 +4,16 @@ Cut a 5s or 10s slot out of the video, regenerate it with AI, and merge the new
 clip back into the exact same slot so total length is unchanged.
 
 Generation runs through the **Pika MCP** (Seedance 2.0, image→video) driven by
-**Claude** — not an HTTP API call. MCP tools are only reachable by the agent, so this is
+**Codex** — not an HTTP API call. MCP tools are only reachable by the agent, so this is
 deliberately *agent-in-the-loop*: the web app does the deterministic media work
-(frame extraction + merge) and hands the creative step to Claude.
+(frame extraction + merge) and hands the creative step to Codex.
 
 That agent step is **automated** by `worker/regen-worker.mjs`, which `run.sh`
 starts alongside the app. It watches `regen/<id>/job.json` for queued jobs and
-spawns a headless `claude` (which already has the Pika MCP connected) to run the
+spawns a headless `codex exec` (which already has the Pika MCP connected) to run the
 generation + `/complete` handoff — so a Regenerate click now completes on its
 own. The steps below describe what that agent does; you only run them by hand if
-the worker isn't running (e.g. `claude` isn't installed).
+the worker isn't running (e.g. `codex` isn't installed).
 
 ## Flow
 
@@ -25,7 +25,7 @@ the worker isn't running (e.g. `claude` isn't installed).
            write job.json { status: "awaiting_generation", ... }     →  regen/<id>/
    │
    ▼
-[claude]   (agent, via MCP — auto-run by worker/regen-worker.mjs)
+[codex]    (agent, via MCP — auto-run by worker/regen-worker.mjs)
            1. read regen/<id>/frame_start.png + frame_end.png
            2. run the prompt-engineer meta-prompt (app/lib/regenPrompt.ts) on the
               two frames → produce `prompt` (Seedance takes no negative_prompt)
@@ -81,7 +81,7 @@ stays put ("slot kept in place").
 
 ## Files
 
-- `worker/regen-worker.mjs` — poller that auto-runs the agent step (headless `claude`).
+- `worker/regen-worker.mjs` — poller that auto-runs the agent step (headless `codex exec`).
 - `app/lib/regen.ts` — ffprobe/extractFrame/mergeReplace (local ffmpeg).
 - `app/lib/regenPrompt.ts` — the prompt-engineer meta-prompt (step 1).
 - `app/api/regenerate/route.ts` — create job + extract frames; GET poll.

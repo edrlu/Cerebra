@@ -20,7 +20,7 @@ export async function GET(request: Request) {
  * POST /api/regenerate — create a regeneration job for one cut.
  * formData: video (File), startSec, endSec, durationSec (5|10), label?
  * Saves the source, extracts the cut's start/end frames, and queues the job for
- * the agent to generate (Claude prompt → Pika generate_video → /complete).
+ * the agent to generate (Codex prompt → Pika generate_video → /complete).
  */
 export async function POST(request: Request) {
   let form: FormData;
