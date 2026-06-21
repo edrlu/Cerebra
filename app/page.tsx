@@ -1077,7 +1077,7 @@ export default function Home() {
           <div className="info-head">
             <h2>Choose a take · {slot}</h2>
             <div className="variant-head-right">
-              {analysis.referenceId && <span className="variant-avg" title="Takes are scored against the original — 50 is the original's baseline, so any take above 50 beats it">Original 50</span>}
+              {analysis.referenceId && <span className="variant-avg" title="The original clip's overall engagement — the mean of its four factors. A take scoring higher beats it.">Original {score}</span>}
               <button className="icon-button" onClick={() => setVariantPicker(null)} aria-label="Close"><Icon name="close" size={18}/></button>
             </div>
           </div>
