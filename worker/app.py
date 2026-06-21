@@ -321,7 +321,20 @@ def resample_to_mesh(values: np.ndarray, hemi: str, source_vertices: int) -> np.
     return values[:, _upsample_index(hemi, source_vertices)]
 
 
-def build_response(predictions: np.ndarray) -> dict:
+def reference_stats(predictions: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Per-vertex temporal mean/SD over a clip — the within-video baseline.
+    Persisted per scored video so later clips (regenerated takes) can be
+    z-scored against THIS video's baseline instead of their own, making their
+    engagement scores comparable across clips (the fixed reference the model
+    authors deferred). SD is floored to avoid divide-by-zero on flat vertices."""
+    pred = np.asarray(predictions, dtype=np.float64)
+    mu = pred.mean(axis=0)
+    sd = pred.std(axis=0)
+    sd[sd < 1e-6] = 1e-6
+    return mu, sd
+
+
+def build_response(predictions: np.ndarray, ref: tuple[np.ndarray, np.ndarray] | None = None) -> dict:
     """Summarise predicted surface responses over the four engagement families.
 
     Within-video, signed, per-vertex baseline: each vertex is z-scored against
@@ -336,11 +349,17 @@ def build_response(predictions: np.ndarray) -> dict:
     pred = np.asarray(predictions, dtype=np.float64)
     n_frames = int(pred.shape[0])
 
-    # Per-vertex temporal baseline (signed): (value - vertex mean) / vertex SD.
-    mu = pred.mean(axis=0, keepdims=True)
-    sd = pred.std(axis=0, keepdims=True)
-    sd[sd < 1e-6] = 1e-6
-    z = (pred - mu) / sd  # (T, V) signed; > 0 means above this vertex's baseline
+    # Per-vertex baseline (signed z): (value - mean) / SD. When `ref` is given we
+    # z-score against ANOTHER video's baseline (the original), so this clip's
+    # engagement is measured relative to the original rather than to itself.
+    if ref is None:
+        mu = pred.mean(axis=0, keepdims=True)
+        sd = pred.std(axis=0, keepdims=True)
+    else:
+        mu = np.asarray(ref[0], dtype=np.float64).reshape(1, -1)
+        sd = np.asarray(ref[1], dtype=np.float64).reshape(1, -1)
+    sd = np.where(sd < 1e-6, 1e-6, sd)
+    z = (pred - mu) / sd  # (T, V) signed; > 0 means above the (reference) baseline
 
     families = _family_rois()
     traces = np.zeros((len(ENGAGEMENT_FAMILIES), n_frames), dtype=np.float32)
@@ -538,7 +557,13 @@ async def predict(video: UploadFile = File(...)):
             print("[predict] inference FAILED:\n" + traceback.format_exc(), flush=True)
             raise HTTPException(status_code=500, detail=f"TRIBE v2 inference failed: {exc}") from exc
 
+        result["referenceId"] = digest
         result["cached"] = False
+        try:
+            mu, sd = reference_stats(predictions)
+            np.savez(PREDICTIONS_DIR / f"{digest}.ref.npz", mu=mu, sd=sd)
+        except Exception as exc:
+            print(f"[cache] failed to save reference {digest[:12]}: {exc}")
         try:
             cache_file.write_text(json.dumps(result))
             print(f"[cache] saved {digest[:12]} -> {cache_file}")
