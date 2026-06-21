@@ -151,19 +151,25 @@ NEXT_DIST_DIR=".next-dev-${NEXT_PORT}"
 rm -rf "$NEXT_DIST_DIR"
 
 # Clip-regeneration worker: watches regen/<id>/job.json for queued cuts and
-# drives the Pika/Seedance generation through a headless `codex exec` (agent-in-the-
-# loop, see REGENERATE.md). Without it, a regenerate request sits in
-# "awaiting_generation" forever. It polls harmlessly until the app is up, so it
-# can start before Next finishes booting.
-if command -v codex >/dev/null 2>&1; then
+# drives the Pika/Seedance generation through a headless agent CLI (claude OR
+# codex — chosen per-job in the UI; see REGENERATE.md). Start it if EITHER CLI
+# is installed (no hard-coded codex). REGEN_AGENTS lists the installed CLIs and
+# is exported so the app rejects a regenerate request up front with a clear error
+# instead of queuing a job nothing can pick up.
+REGEN_AGENTS=""
+command -v claude >/dev/null 2>&1 && REGEN_AGENTS="claude"
+command -v codex  >/dev/null 2>&1 && REGEN_AGENTS="${REGEN_AGENTS:+$REGEN_AGENTS,}codex"
+export REGEN_AGENTS
+if [[ -n "$REGEN_AGENTS" ]]; then
   REGEN_WORKER_LOG="$ROOT_DIR/.regen-worker-${NEXT_PORT}.log"
-  info "Starting clip-regeneration worker (logs: ${REGEN_WORKER_LOG#$ROOT_DIR/})"
+  info "Starting clip-regeneration worker (agents: ${REGEN_AGENTS} · logs: ${REGEN_WORKER_LOG#$ROOT_DIR/})"
   CEREBRA_URL="http://localhost:${NEXT_PORT}" \
   node "$ROOT_DIR/worker/regen-worker.mjs" >"$REGEN_WORKER_LOG" 2>&1 &
   REGEN_WORKER_PID=$!
 else
-  echo "Note: 'codex' CLI not found — clip regeneration will stay queued."
-  echo "  Install Codex so the worker can run the Pika/Seedance step."
+  echo "Note: no generation-agent CLI ('claude' or 'codex') found — clip"
+  echo "  regeneration will return an error immediately (no silent queue)."
+  echo "  Install one (e.g. 'claude') and restart to enable it."
 fi
 
 TRIBEV2_API_URL="http://${WORKER_HOST}:${WORKER_PORT}" \
