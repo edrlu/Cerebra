@@ -574,3 +574,15 @@ body { background:var(--app-bg); }.app-shell { background:var(--app-bg); }
   .studio-shell .rag-node { min-width:176px; }
   .studio-shell .rag-conn { flex-basis:18px; }
 }
+
+/* Regen take picker — scores, factor breakdown, best badge, reject-all. */
+.variant-head-right { display: flex; align-items: center; gap: 12px; }
+.variant-avg { font-size: 12px; opacity: 0.7; white-space: nowrap; }
+.variant-card.best { outline: 1px solid var(--accent, #6ad6c0); outline-offset: 2px; }
+.variant-best { color: var(--accent, #6ad6c0); font-weight: 600; }
+.variant-factors { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+.variant-factor { display: inline-flex; align-items: baseline; gap: 4px; font-size: 11px; padding: 2px 6px; border-radius: 6px; background: var(--surface-2, rgba(255,255,255,0.06)); }
+.variant-factor i { font-style: normal; opacity: 0.55; font-size: 10px; letter-spacing: 0.04em; }
+.variant-foot { display: flex; justify-content: flex-end; margin-top: 14px; }
+.variant-reject { background: transparent; border: 1px solid var(--border, rgba(255,255,255,0.15)); color: inherit; opacity: 0.8; padding: 7px 12px; border-radius: 8px; cursor: pointer; font-size: 13px; }
+.variant-reject:hover { opacity: 1; }

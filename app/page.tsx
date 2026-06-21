@@ -14,6 +14,7 @@ type Analysis = {
   peak: { time: number; label: string; value: number };
   source: "demo" | "model";
   cognitiveSeries?: Record<string, number[]>;
+  referenceId?: string; // sha256 of the scored original; lets takes be scored against it
 };
 
 // Cortical surface proxy regions, in the worker's family order. These are
@@ -34,8 +35,10 @@ type RegenStatus = "extracting" | "awaiting_generation" | "generating" | "mergin
 // Each Regenerate fans out into VARIANT_COUNT independent jobs for the SAME slot
 // — three agent → Pika calls in parallel — so the user gets several takes to
 // choose from. A segment's state is the list of those variant jobs.
-type RegenVariant = { jobId?: string; status: RegenStatus; clipUrl?: string; downloadUrl?: string; logUrl?: string; logTail?: string; error?: string; startedAt?: number; score?: number };
-type RegenJobState = { variants: RegenVariant[] };
+type Factors = { AUD: number; LANG: number; ATTN: number; VIS: number };
+type TakeSeries = { global: number[]; AUD: number[]; LANG: number[]; ATTN: number[]; VIS: number[] };
+type RegenVariant = { jobId?: string; status: RegenStatus; clipUrl?: string; downloadUrl?: string; logUrl?: string; logTail?: string; error?: string; startedAt?: number; score?: number; factors?: Factors; series?: TakeSeries };
+type RegenJobState = { variants: RegenVariant[]; runId?: string; scoring?: boolean; scored?: boolean; best?: number; average?: number };
 type Cut = { start: number; end: number; frameId?: string; preparing?: boolean; frameRequested?: boolean; frameError?: string };
 const VARIANT_COUNT = 3;
 // Leave the final video tail alone. Container duration metadata can include a
@@ -114,6 +117,26 @@ function createDemoForFile(file: File, scheme: ColorSchemeId): Analysis {
     wave(40 * f, 22, 0.26, 3.1 + file.size % 7),
     wave(38 * f, 20, 0.20, 5.0 + file.size % 4),
   ], duration, "demo", scheme);
+}
+
+const FAMILY_KEY_BY_SHORT: Record<string, string> = {
+  AUD: "auditory_engagement",
+  LANG: "language_message",
+  ATTN: "attention_salience",
+  VIS: "visual_motion",
+};
+
+// Linearly resample a per-frame series to exactly n points (the take is ~5
+// samples at 1 Hz; the graph segment may have a different frame count).
+function resampleTo(series: number[], n: number): number[] {
+  if (n <= 0) return [];
+  if (series.length === 0) return new Array(n).fill(0);
+  if (series.length === 1) return new Array(n).fill(series[0]);
+  return Array.from({ length: n }, (_, k) => {
+    const pos = n === 1 ? 0 : (k / (n - 1)) * (series.length - 1);
+    const lo = Math.floor(pos), hi = Math.ceil(pos), frac = pos - lo;
+    return series[lo] * (1 - frac) + series[hi] * frac;
+  });
 }
 
 function engagementScore(a: Analysis): number {
@@ -615,7 +638,7 @@ export default function Home() {
     const runId = new Date().toISOString().replace(/[:.]/g, "-");
     // Fresh batch: clear any prior picker auto-open guard and seed N pending variants.
     autoOpenedRef.current.delete(key);
-    setRegenJobs((j) => ({ ...j, [key]: { variants: Array.from({ length: VARIANT_COUNT }, () => ({ status: "extracting" as RegenStatus })) } }));
+    setRegenJobs((j) => ({ ...j, [key]: { variants: Array.from({ length: VARIANT_COUNT }, () => ({ status: "extracting" as RegenStatus })), runId } }));
     // One activity-feed row PER take (regen_<key>_t<i>) so all VARIANT_COUNT
     // show up side by side in ASK CEREBRA, not collapsed into a single line.
     for (let i = 0; i < VARIANT_COUNT; i++) {
@@ -650,19 +673,99 @@ export default function Home() {
     }));
   }
 
+  // Replace [start,end] of the engagement graph with the chosen take's per-frame
+  // series (already z-scored vs the original, so it drops in on the same scale).
+  // Updates global, each region's values + mean score, and cognitiveSeries; the
+  // overall engagementScore() useMemo recomputes from the new analysis.
+  function spliceTakeIntoAnalysis(series: TakeSeries, start: number, end: number) {
+    setAnalysis((a) => {
+      const len = a.global.length;
+      if (!len || !a.duration) return a;
+      const i0 = Math.max(0, Math.round((start / a.duration) * (len - 1)));
+      const i1 = Math.min(len - 1, Math.round((end / a.duration) * (len - 1)));
+      const n = i1 - i0 + 1;
+      if (n <= 0) return a;
+      const spliceInto = (orig: number[], take: number[]) => {
+        const next = orig.slice();
+        const rs = resampleTo(take, n);
+        for (let k = 0; k < n; k++) next[i0 + k] = rs[k];
+        return next;
+      };
+      const global = spliceInto(a.global, series.global);
+      const cognitiveSeries: Record<string, number[]> = { ...(a.cognitiveSeries ?? {}) };
+      const regions = a.regions.map((r) => {
+        const takeVals = series[r.short as keyof TakeSeries];
+        if (!Array.isArray(takeVals)) return r;
+        const values = spliceInto(r.values, takeVals);
+        const fk = FAMILY_KEY_BY_SHORT[r.short];
+        if (fk) cognitiveSeries[fk] = values;
+        const score = Math.round((values.reduce((s, x) => s + x, 0) / values.length) * 10) / 10;
+        return { ...r, values, score };
+      });
+      return { ...a, global, regions, cognitiveSeries };
+    });
+  }
+
   // Adopt one chosen take: its final.mp4 is the full source with that take spliced
   // in place, so we promote it to the active editor video and clear the batch.
   async function chooseVariant(key: string, i: number) {
     const v = regenJobs[key]?.variants[i];
     if (!v?.downloadUrl) return;
+    const series = v.series;
     const [start, end] = key.split("-").map(Number);
     const slot = `${formatTime(start)}–${formatTime(end)}`;
     setVariantPicker(null);
     try {
       await replacePreviewWithRegeneratedVideo(v.downloadUrl, { start, end }, key);
-      logUpsert(`regen_${key}_t${i}`, { title: `Regenerate ${slot} · take ${i + 1}`, detail: "Applied in place · ready to play", status: "done", href: v.downloadUrl });
+      if (series) spliceTakeIntoAnalysis(series, start, end);
+      logUpsert(`regen_${key}_t${i}`, { title: `Regenerate ${slot} · take ${i + 1}`, detail: "Applied in place · graph updated · ready to play", status: "done", href: v.downloadUrl });
     } catch (error) {
       logUpsert(`regen_${key}_t${i}`, { title: `Regenerate ${slot} · take ${i + 1}`, detail: error instanceof Error ? error.message : "Couldn't load the regenerated video", status: "error" });
+    }
+  }
+
+  // Discard all takes for a slot and keep the original untouched. The segment
+  // stays so the user can regenerate again.
+  function rejectAll(key: string) {
+    setVariantPicker(null);
+    autoOpenedRef.current.delete(key);
+    setRegenJobs((prev) => { const next = { ...prev }; delete next[key]; return next; });
+  }
+
+  // Once a batch finishes generating, score all takes against the ORIGINAL in one
+  // run-level pass, then reveal the picker with scores. No clip is shown without
+  // its score. If the original was never scored by the live model (demo fallback,
+  // no referenceId), open the picker unscored rather than blocking.
+  async function scoreBatch(key: string) {
+    const st = regenJobs[key];
+    const runId = st?.runId;
+    const referenceId = analysis.referenceId;
+    if (!runId || !referenceId) { setVariantPicker(key); return; }
+    setRegenJobs((prev) => (prev[key] ? { ...prev, [key]: { ...prev[key], scoring: true } } : prev));
+    setVariantPicker(key);
+    try {
+      const res = await fetch("/api/regenerate/score", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ runId, referenceId }),
+      });
+      if (!res.ok) {
+        const detail = await res.json().then((d) => d?.error).catch(() => null);
+        logUpsert(`regen_${key}_score`, { title: "Take scoring", detail: detail || "Scoring failed — showing takes without scores.", status: "note" });
+        throw new Error(detail || "scoring request failed");
+      }
+      const data: { best: number; average: number; takes: { takeIndex: number; score: number; factors: Factors; series: TakeSeries }[] } = await res.json();
+      setRegenJobs((prev) => {
+        const cur = prev[key];
+        if (!cur) return prev;
+        const variants = cur.variants.slice();
+        for (const t of data.takes) {
+          if (variants[t.takeIndex]) variants[t.takeIndex] = { ...variants[t.takeIndex], score: t.score, factors: t.factors, series: t.series };
+        }
+        return { ...prev, [key]: { ...cur, variants, scoring: false, scored: true, best: data.best, average: data.average } };
+      });
+    } catch {
+      setRegenJobs((prev) => (prev[key] ? { ...prev, [key]: { ...prev[key], scoring: false } } : prev));
     }
   }
 
@@ -692,7 +795,6 @@ export default function Home() {
           if (job.status !== v.status || job.logTail !== v.logTail) {
             updateVariant(key, i, {
               status: job.status, error: job.error, logTail: job.logTail, logUrl: job.logUrl,
-              score: job.score,
               clipUrl: job.status === "done" ? `/api/regenerate/file?job=${v.jobId}&name=clip.mp4` : v.clipUrl,
               downloadUrl: job.status === "done" ? `/api/regenerate/file?job=${v.jobId}&name=final.mp4` : v.downloadUrl,
             });
@@ -707,16 +809,15 @@ export default function Home() {
     return () => clearInterval(id);
   }, [regenJobs, updateVariant]);
 
-  // When a batch finishes (nothing in flight) with at least one good take, open
-  // the picker once so the user can choose without hunting for a button.
+  // When a batch finishes (nothing in flight) with at least one good take, score
+  // it once (which opens the picker). The autoOpenedRef guard fires this once.
   useEffect(() => {
     for (const [key, st] of Object.entries(regenJobs)) {
       const anyFlight = st.variants.some((v) => isInFlight(v.status));
       const doneCount = st.variants.filter((v) => v.status === "done").length;
-      if (!anyFlight && doneCount > 0 && !autoOpenedRef.current.has(key)) {
-        autoOpenedRef.current.add(key);
-        setVariantPicker(key);
-      }
+      if (anyFlight || doneCount === 0 || autoOpenedRef.current.has(key)) continue;
+      autoOpenedRef.current.add(key);
+      void scoreBatch(key);
     }
   }, [regenJobs]);
 
@@ -927,22 +1028,44 @@ export default function Home() {
 
     {variantPicker && regenJobs[variantPicker] && (() => {
       const key = variantPicker;
+      const st = regenJobs[key];
       const [start, end] = key.split("-").map(Number);
       const slot = `${formatTime(start)} – ${formatTime(end)}`;
-      const variants = regenJobs[key].variants;
+      const variants = st.variants;
       const stillGenerating = variants.some((v) => isInFlight(v.status));
+      const FACTORS: (keyof Factors)[] = ["AUD", "LANG", "ATTN", "VIS"];
       return <div className="info-backdrop" onClick={() => setVariantPicker(null)}>
         <div className="variant-modal" onClick={(e) => e.stopPropagation()}>
-          <div className="info-head"><h2>Choose a take · {slot}</h2><button className="icon-button" onClick={() => setVariantPicker(null)} aria-label="Close"><Icon name="close" size={18}/></button></div>
-          <p className="variant-sub">{VARIANT_COUNT} independent AI takes of this slot{stillGenerating ? " — still generating, takes appear as they finish." : ". Pick the one to splice in."}</p>
+          <div className="info-head">
+            <h2>Choose a take · {slot}</h2>
+            <div className="variant-head-right">
+              {typeof st.average === "number" && <span className="variant-avg" title="Average headline (mean of the 4 factors) across the takes">avg {st.average} vs original</span>}
+              <button className="icon-button" onClick={() => setVariantPicker(null)} aria-label="Close"><Icon name="close" size={18}/></button>
+            </div>
+          </div>
+          <p className="variant-sub">
+            {VARIANT_COUNT} AI takes of this slot, each scored vs the original (50 = original baseline).
+            {stillGenerating ? " Still generating — takes appear as they finish." : st.scoring ? " Scoring against the original…" : " Pick one to splice in."}
+          </p>
           <div className="variant-grid">
-            {variants.map((v, i) => <div className={`variant-card ${v.status}`} key={i}>
-              <div className="variant-head"><span>Take {i + 1}</span><span className="variant-labels">{v.status === "done" && typeof v.score === "number" && <b className="variant-score" title="Filler model grade" aria-label={`Filler model grade ${v.score} out of 100`}>{v.score}</b>}{v.status === "done" ? <em className="ok">ready</em> : v.status === "error" ? <em className="bad">failed</em> : <em>{REGEN_LABEL[v.status]}</em>}</span></div>
+            {variants.map((v, i) => <div className={`variant-card ${v.status} ${st.best === i && st.scored ? "best" : ""}`} key={i}>
+              <div className="variant-head">
+                <span>Take {i + 1}{st.best === i && st.scored ? <b className="variant-best" title="Best overall across the 4 factors"> · BEST</b> : null}</span>
+                <span className="variant-labels">
+                  {st.scoring && v.status === "done" && typeof v.score !== "number" && <em>scoring…</em>}
+                  {typeof v.score === "number" && <b className="variant-score" title="Headline: mean of the 4 factors, vs the original baseline of 50" aria-label={`Score ${v.score}, baseline 50`}>{v.score}</b>}
+                  {v.status === "done" ? <em className="ok">ready</em> : v.status === "error" ? <em className="bad">failed</em> : <em>{REGEN_LABEL[v.status]}</em>}
+                </span>
+              </div>
               {v.status === "done" && v.clipUrl
                 ? <video className="variant-video" src={v.clipUrl} muted loop playsInline autoPlay controls/>
                 : <div className="variant-pending">{v.status === "error" ? <span className="variant-error" title={v.error}>{v.error || "Generation failed"}</span> : <><i className="regen-dot"/>{REGEN_LABEL[v.status]}</>}</div>}
+              {v.factors && <div className="variant-factors">{FACTORS.map((f) => <span key={f} className="variant-factor"><i>{f}</i>{Math.round(v.factors![f])}</span>)}</div>}
               <button className="variant-use" disabled={v.status !== "done"} onClick={() => chooseVariant(key, i)}>Use this take</button>
             </div>)}
+          </div>
+          <div className="variant-foot">
+            <button className="variant-reject" onClick={() => rejectAll(key)}>Reject all · keep original</button>
           </div>
         </div>
       </div>;
