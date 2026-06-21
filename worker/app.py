@@ -14,10 +14,16 @@ from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
+import torch
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from tribev2 import TribeModel
+
+# Use Ampere+ TF32 tensor cores for fp32 matmuls (the V-JEPA2 ViT is matmul-heavy):
+# a large speedup on GPUs like the A100 with negligible accuracy change. No-op on CPU.
+torch.set_float32_matmul_precision("high")
+torch.backends.cudnn.allow_tf32 = True
 
 MODEL_ID = os.getenv("TRIBEV2_MODEL_ID", "facebook/tribev2")
 # Docker supplies /data/cache. For a native local run, keep the downloaded
