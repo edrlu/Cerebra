@@ -212,7 +212,7 @@ export default function Home() {
   const activeScheme = COLOR_SCHEMES[colorScheme];
   const families = useMemo(() => familiesForScheme(colorScheme), [colorScheme]);
 
-  // Activity feed shown in the ASK CEREBRA panel: every API generation
+  // Activity feed shown in the Activity panel: every API generation
   // (analysis + clip regeneration) writes a live, status-tracked log line.
   function logUpsert(id: string, entry: Omit<LogEntry, "id" | "ts"> & { ts?: number }) {
     setLogs((prev) => {
@@ -635,7 +635,7 @@ export default function Home() {
 
   return <main className="app-shell" style={activeScheme.tokens as CSSProperties}>
     <header className="topbar">
-      <div className="wordmark"><span className="wordmark-mark"><i/><i/><i/></span><span>cerebra<span className="wordmark-dot">.</span></span></div>
+      <div className="wordmark"><span className="wordmark-mark" aria-hidden><b/></span><span>percept</span></div>
       <nav className="topbar-tabs" role="tablist" aria-label="Workspace tabs">
         <button role="tab" aria-selected={activeTab === "studio"} className={`topbar-tab ${activeTab === "studio" ? "active" : ""}`} onClick={() => setActiveTab("studio")}>
           <span className="tab-dot"/>Studio
@@ -736,7 +736,7 @@ export default function Home() {
           </div>
           <div className="panel cognitive-panel"><div className="panel-head"><span>CORTICAL PROXY BREAKDOWN</span></div>{families.map((f) => { const peak = Math.max(0, ...(analysis.cognitiveSeries?.[f.key] ?? [0])); return <div className="cue-row" key={f.key}><span>{f.name}</span><div><i style={{ width: `${peak}%`, background: f.color }}/></div><b>{Math.round(peak)}</b></div>; })}<div className="breakdown-log" role="note" aria-label="Model interpretation notes"><div className="log-stamps"><span><b>MODEL</b> TRIBE v2</span><span><b>READOUT</b> CORTICAL SURFACE</span><span className="caution-stamp"><b>LIMIT</b> PROXIES ONLY</span></div><p className="log-note">Display-only cortical summaries · no emotion, intent, memory, or subcortical-state measurement.</p></div></div>
         </div>
-        <div className="panel chat-panel"><div className="panel-head"><span>ASK CEREBRA</span><span className="log-count">{logs.length ? `${logs.length} EVENT${logs.length > 1 ? "S" : ""}` : "ACTIVITY"}</span></div>
+        <div className="panel chat-panel"><div className="panel-head"><span>Activity</span><span className="log-count">{logs.length ? `${logs.length} EVENT${logs.length > 1 ? "S" : ""}` : "ACTIVITY"}</span></div>
           <div className="chat-log">
             {logs.length === 0
               ? <div className="chat-empty">Generation logs stream here — TRIBE&nbsp;v2 analysis and clip regenerations report live as they run.</div>
@@ -751,7 +751,7 @@ export default function Home() {
                 </div>)}
             <div ref={logEndRef}/>
           </div>
-          <div className="chat-composer"><input aria-label="Ask Cerebra" placeholder="Ask about this response…"/><button type="button">Prompt</button></div></div>
+          <div className="chat-composer"><input aria-label="Ask percept" placeholder="Ask about this response…"/><button type="button">Prompt</button></div></div>
       </aside>
     </section>}
 
@@ -759,8 +759,8 @@ export default function Home() {
 
     {showInfo && <div className="info-backdrop" onClick={() => setShowInfo(false)}>
       <div className="info-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="info-head"><h2>How Cerebra reads an ad</h2><button className="icon-button" onClick={() => setShowInfo(false)} aria-label="Close"><Icon name="close" size={18}/></button></div>
-        <p>Cerebra runs your video through Meta&apos;s <b>TRIBE v2</b> model, which predicts a population-average cortical response to the clip. We summarise that response over four manually defined cortical surface proxies, shown live as the video plays. These proxies do not measure emotional state, intent, memory, or subcortical activity.</p>
+        <div className="info-head"><h2>How percept reads an ad</h2><button className="icon-button" onClick={() => setShowInfo(false)} aria-label="Close"><Icon name="close" size={18}/></button></div>
+        <p>percept runs your video through Meta&apos;s <b>TRIBE v2</b> model, which predicts a population-average cortical response to the clip. We summarise that response over four manually defined cortical surface proxies, shown live as the video plays. These proxies do not measure emotional state, intent, memory, or subcortical activity.</p>
         <ul className="info-systems">{families.map((f) => <li key={f.key}><span className="info-dot" style={{ background: f.color }}/><div><b>{f.name}</b><span>{f.blurb}</span></div></li>)}</ul>
         <p className="info-foot">TRIBE v2 provides modeled population-average cortical predictions. This interface adds display-only cortical proxy summaries; it is not a measurement of any individual viewer, a cognitive-state detector, or a medical/diagnostic tool.</p>
       </div>

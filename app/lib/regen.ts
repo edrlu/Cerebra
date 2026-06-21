@@ -36,7 +36,7 @@ export type RegenJob = {
 // server restart and are shared by every client + the worker.
 export type RegenSettings = { provider: "seedance" | "kling"; agent: "claude" | "codex" };
 export const DEFAULT_SETTINGS: RegenSettings = { provider: "seedance", agent: "codex" };
-const SETTINGS_FILE = path.join(process.cwd(), ".cerebra-settings.json");
+const SETTINGS_FILE = path.join(process.cwd(), ".percept-settings.json");
 
 export async function readSettings(): Promise<RegenSettings> {
   try {

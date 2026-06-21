@@ -1,8 +1,8 @@
-# Cerebra
+# percept
 
 **An interactive explorer for population-average cortical-response predictions from video.**
 
-Cerebra turns an uploaded video into a time-scrubbable view of Meta's [TRIBE v2](https://huggingface.co/facebook/tribev2) cortical-response predictions. It pairs an anatomical WebGL cortex with frame-level response charts, cortical proxy summaries, and a compact video timeline.
+percept turns an uploaded video into a time-scrubbable view of Meta's [TRIBE v2](https://huggingface.co/facebook/tribev2) cortical-response predictions. It pairs an anatomical WebGL cortex with frame-level response charts, cortical proxy summaries, and a compact video timeline.
 
 ## What it includes
 
@@ -14,7 +14,7 @@ Cerebra turns an uploaded video into a time-scrubbable view of Meta's [TRIBE v2]
 
 ## How it works
 
-With the local worker running, Cerebra sends an uploaded video to `facebook/tribev2`. The model extracts video, audio, and language features and returns predicted average-subject fMRI-style responses on the fsaverage5 cortical mesh. The worker then aggregates the surface output over four manually defined display regions for the browser.
+With the local worker running, percept sends an uploaded video to `facebook/tribev2`. The model extracts video, audio, and language features and returns predicted average-subject fMRI-style responses on the fsaverage5 cortical mesh. The worker then aggregates the surface output over four manually defined display regions for the browser.
 
 The interface also works without the worker as a clearly labelled visual preview using synthetic data.
 
@@ -52,19 +52,19 @@ Without `TRIBEV2_API_URL`, the UI remains usable in visual-preview mode.
 
 ```bash
 cd worker
-docker build -t cerebra-tribev2 .
+docker build -t percept-tribev2 .
 docker run --rm -p 8000:8000 \
   -e HF_TOKEN=your_huggingface_read_token \
-  -v tribev2-cache:/data/cache cerebra-tribev2
+  -v tribev2-cache:/data/cache percept-tribev2
 ```
 
 Then set `TRIBEV2_API_URL=http://localhost:8000` in `.env.local` and restart the frontend.
 
 ## Scientific scope
 
-TRIBE v2 predicts **population-average cortical responses** to naturalistic stimuli. Cerebra's four surface regions are manually defined display proxies. They are not direct measurements of emotion, reward, desire, intent, self-relevance, memory encoding, subcortical activity, an individual viewer's mental state, or health.
+TRIBE v2 predicts **population-average cortical responses** to naturalistic stimuli. percept's four surface regions are manually defined display proxies. They are not direct measurements of emotion, reward, desire, intent, self-relevance, memory encoding, subcortical activity, an individual viewer's mental state, or health.
 
-Cerebra is a research/visualization interface—not an fMRI scanner, diagnostic tool, or behavioral truth machine.
+percept is a research/visualization interface—not an fMRI scanner, diagnostic tool, or behavioral truth machine.
 
 ## Development checks
 
