@@ -1137,6 +1137,20 @@ export default function Home() {
       const originalSlotScore = analysis.global.length > 1
         ? Math.round(FAMILY_KEYS.reduce((sum, fk) => sum + slotMean(analysis.cognitiveSeries?.[fk] ?? []), 0) / FAMILY_KEYS.length)
         : score;
+      // Display-only normalization (requested): once EVERY take has finished
+      // scoring, slide all take scores by a SINGLE constant so their average
+      // equals the original clip's score for this slot. The shift is uniform —
+      // it never reorders the takes or changes the BEST pick — and it touches
+      // ONLY the numbers shown here, never the stored score/factors/series or any
+      // worker-side calculation. Scores stay hidden until the whole batch is in,
+      // because the offset can't be known until every take has a score.
+      const scoredVals = variants.filter((v) => typeof v.score === "number").map((v) => v.score as number);
+      const showScores = !variants.some((v) => isInFlight(v.status)) && !st.scoring && scoredVals.length > 0;
+      const rawAvg = scoredVals.length ? scoredVals.reduce((s, x) => s + x, 0) / scoredVals.length : 0;
+      const displayOffset = showScores ? originalSlotScore - rawAvg : 0;
+      // Same offset for the headline and all four factors, so each take's shown
+      // factors still average to its shown headline.
+      const adjust = (n: number) => Math.round(n + displayOffset);
       return <div className="info-backdrop" onClick={() => setVariantPicker(null)}>
         <div className="variant-modal" onClick={(e) => e.stopPropagation()}>
           <div className="info-head">
@@ -1147,23 +1161,23 @@ export default function Home() {
             </div>
           </div>
           <p className="variant-sub">
-            {VARIANT_COUNT} AI takes of this slot, each scored vs the original (50 = original baseline).
-            {stillGenerating ? " Still generating — takes appear as they finish." : st.scoring ? " Scoring against the original…" : " Pick one to splice in."}
+            {VARIANT_COUNT} AI takes of this slot, scored vs the original (50 = baseline) then shifted together so the takes average to the original score for this slot.
+            {stillGenerating ? " Still generating — takes appear as they finish." : !showScores ? " Scoring every take — scores appear once they are all in." : " Pick one to splice in."}
           </p>
           <div className="variant-grid">
             {variants.map((v, i) => <div className={`variant-card ${v.status} ${st.best === i && st.scored ? "best" : ""}`} key={i}>
               <div className="variant-head">
                 <span>Take {i + 1}{st.best === i && st.scored ? <b className="variant-best" title="Best overall across the 4 factors"> · BEST</b> : null}</span>
                 <span className="variant-labels">
-                  {st.scoring && v.status === "done" && typeof v.score !== "number" && <em>scoring…</em>}
-                  {typeof v.score === "number" && <b className="variant-score" title="Headline: mean of the 4 factors, vs the original baseline of 50" aria-label={`Score ${v.score}, baseline 50`}>{v.score}</b>}
+                  {!showScores && v.status === "done" && <em>scoring…</em>}
+                  {showScores && typeof v.score === "number" && <b className="variant-score" title="The take's engagement, normalized so the takes average to the original's score for this slot (the four factors are shifted by the same amount)." aria-label={`Score ${adjust(v.score)}`}>{adjust(v.score)}</b>}
                   {v.status === "done" ? <em className="ok">ready</em> : v.status === "error" ? <em className="bad">failed</em> : <em>{REGEN_LABEL[v.status]}</em>}
                 </span>
               </div>
               {v.status === "done" && v.clipUrl
                 ? <video className="variant-video" src={v.clipUrl} muted loop playsInline autoPlay controls/>
                 : <div className="variant-pending">{v.status === "error" ? <span className="variant-error" title={v.error}>{v.error || "Generation failed"}</span> : <><i className="regen-dot"/>{REGEN_LABEL[v.status]}</>}</div>}
-              {v.factors && <div className="variant-factors">{FACTORS.map((f) => <span key={f} className="variant-factor"><i>{f}</i>{Math.round(v.factors![f])}</span>)}</div>}
+              {showScores && v.factors && <div className="variant-factors">{FACTORS.map((f) => <span key={f} className="variant-factor"><i>{f}</i>{adjust(v.factors![f])}</span>)}</div>}
               <button className="variant-use" disabled={v.status !== "done"} onClick={() => chooseVariant(key, i)}>Use this take</button>
             </div>)}
           </div>
