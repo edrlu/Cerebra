@@ -7,6 +7,7 @@ surface tensor to a browser. The model still runs its full cortical prediction.
 import hashlib
 import json
 import os
+import subprocess
 import tempfile
 import threading
 from contextlib import asynccontextmanager
@@ -33,6 +34,10 @@ MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(1_000_000_000)))
 # Per-video prediction cache: each result is saved as <sha256-of-video>.json here,
 # so re-uploading the same clip returns instantly instead of re-running inference.
 PREDICTIONS_DIR = Path(os.getenv("TRIBEV2_PREDICTIONS_DIR", str(Path(__file__).resolve().parent.parent / "prediction_cache")))
+# Downscale uploads to this shorter-side height (px) before the encode loop. V-JEPA2
+# resizes frames to 256x256 anyway, so this leaves scores ~unchanged but makes frame
+# DECODING (the real bottleneck) far cheaper. Set TRIBEV2_DOWNSCALE=0 to disable.
+DOWNSCALE_TARGET = int(os.getenv("TRIBEV2_DOWNSCALE", "288"))
 model: TribeModel | None = None
 
 
@@ -379,6 +384,29 @@ def surface_mesh():
     return get_surface_mesh()
 
 
+def _maybe_downscale(src: Path) -> Path:
+    """ffmpeg-downscale the video's shorter side to DOWNSCALE_TARGET px before the
+    encode loop, so frame decoding (the real bottleneck) is cheap. V-JEPA2 resizes
+    to 256x256 regardless, so scores are ~unchanged. Falls back to the original on
+    ANY failure (ffmpeg missing, odd codec, timeout) so a predict never breaks here."""
+    if DOWNSCALE_TARGET <= 0:
+        return src
+    out = src.with_name(f"{src.stem}_ds.mp4")
+    t = DOWNSCALE_TARGET
+    # Scale whichever side is shorter to <= t, preserving aspect, never upscaling.
+    vf = f"scale='if(gt(iw,ih),-2,min({t},iw))':'if(gt(iw,ih),min({t},ih),-2)'"
+    cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", str(src),
+           "-vf", vf, "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", str(out)]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, timeout=300)
+        if out.exists() and out.stat().st_size > 0:
+            print(f"[downscale] {src.name}: shorter side -> <= {t}px")
+            return out
+    except Exception as exc:
+        print(f"[downscale] skipped, using original ({exc})")
+    return src
+
+
 @app.post("/predict")
 async def predict(video: UploadFile = File(...)):
     if not video.content_type or not video.content_type.startswith("video/"):
@@ -416,7 +444,8 @@ async def predict(video: UploadFile = File(...)):
                 print(f"[cache] ignoring unreadable {cache_file.name}: {exc}")
 
         try:
-            events = model.get_events_dataframe(video_path=str(destination))
+            infer_path = _maybe_downscale(destination)
+            events = model.get_events_dataframe(video_path=str(infer_path))
             # Run the GPU feature extractors (esp. the fp32 V-JEPA2 ViT) + the
             # transformer under bf16 autocast: ~2-3x faster on the A100 with
             # negligible accuracy change. autocast keeps numerically-sensitive ops
