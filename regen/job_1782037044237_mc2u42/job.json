@@ -1,6 +1,6 @@
 {
   "id": "job_1782037044237_mc2u42",
-  "status": "generating",
+  "status": "error",
   "stage": "agent",
   "startSec": 0,
   "endSec": 5.000000000000002,
@@ -14,5 +14,6 @@
   "takeIndex": 1,
   "label": "0:00–0:05 · take 2",
   "createdAt": "2026-06-21T10:17:25.135Z",
-  "updatedAt": "2026-06-21T11:20:06.561Z"
+  "updatedAt": "2026-06-21T12:20:33.453Z",
+  "error": "REGEN_FAILED: completion endpoint returned HTTP 404"
 }

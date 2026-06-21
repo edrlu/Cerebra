@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, DragEvent, type PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { ChangeEvent, DragEvent, type PointerEvent as ReactPointerEvent, type SyntheticEvent, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { CorticalBrain } from "./components/CorticalBrain";
 import { Studio } from "./components/Studio";
 import { ProgressRail, type Stage } from "./components/ProgressRail";
@@ -264,8 +264,9 @@ export default function Home() {
   const [genModel, setGenModel] = useState<RegenProvider>(DEFAULT_REGEN_PROVIDER);
   const [genAgent, setGenAgent] = useState<RegenAgent>(DEFAULT_REGEN_AGENT);
   const [timelineMode, setTimelineMode] = useState<"net" | "split">("net");
-  // The activity feed lives in a drawer so the brain stays the hero.
-  const [activityOpen, setActivityOpen] = useState(false);
+  // One right-side panel holds both readouts: Response systems by default,
+  // auto-flipping to the Activity log the moment a clip regeneration runs.
+  const [panelView, setPanelView] = useState<"systems" | "activity">("systems");
   // Highlight the highest-upside moments on the net ribbon (from main's lift-points).
   const [showLiftPoints, setShowLiftPoints] = useState(false);
   // Two-tab flow: Create (Studio) → Refine. Measuring how the brain responds and
@@ -293,6 +294,7 @@ export default function Home() {
     const anyActive = Object.values(regenJobs).some((st) => st.variants.some((v) => v.startedAt && isInFlight(v.status)));
     if (!anyActive) return;
     setRegenNow(Date.now());
+    setPanelView("activity");
     const id = setInterval(() => setRegenNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, [regenJobs]);
@@ -865,7 +867,35 @@ export default function Home() {
   }, [analysis.duration, analysis.frames]);
   const playhead = (time / analysis.duration);
 
+  // Cut mode swaps the slim transport for a full video-editor layout: a large
+  // preview on the left and a perfectly aligned ribbon + frame strip on the right.
+  const inCutMode = spliceMode || cuts.length > 0;
+  const onClipMeta = (e: SyntheticEvent<HTMLVideoElement>) => {
+    const d = e.currentTarget.duration || 0;
+    setVideoDuration(d);
+    videoDurationRef.current = d;
+    // Patch the duration onto whatever analysis is already showing
+    // (covers metadata arriving after prediction has resolved).
+    if (d && Number.isFinite(d)) setAnalysis((a) => (Math.abs(a.duration - d) < 0.05 ? a : { ...a, duration: d, peak: { ...a.peak, time: a.duration ? (a.peak.time / a.duration) * d : 0 } }));
+  };
+  // The net / split ribbon, extracted so it can sit full-width in the slim deck
+  // or nest in the cut-mode rails (sharing the frame strip's exact bounds).
+  const ribbon = timelineMode === "net"
+    ? <div className={`timeline-graph net-graph ${showLiftPoints ? "showing-lift-points" : ""}`}><svg viewBox="0 0 700 96" preserveAspectRatio="none"><defs><linearGradient id="deckAreaFill" x1="0" x2="0" y1="0" y2="1"><stop stopColor="var(--chart-fill)" stopOpacity=".22"/><stop offset="1" stopColor="var(--chart-fill)" stopOpacity="0"/></linearGradient></defs><g className="frame-markers">{filmstripFrames.map((frame, i) => <line key={i} x1={frame.position * 700} x2={frame.position * 700} y1="0" y2="96"/>)}</g><path d={`${linePath(analysis.global, 700, 96)} L700,96 L0,96 Z`} fill="url(#deckAreaFill)"/><path d={linePath(analysis.global, 700, 96)} fill="none" stroke="var(--chart-line)" strokeWidth="2"/>{showLiftPoints && <g className="lift-point-lines">{liftPoints.map((point) => <path key={`${point.startIndex}-${point.endIndex}`} d={lineSegmentPath(analysis.global, point.startIndex, point.endIndex, 700, 96)} fill="none"/>)}</g>}<line x1={playhead * 700} x2={playhead * 700} y1="0" y2="96" className="time-line"/></svg><input aria-label="Net engagement timeline" type="range" min="0" max={analysis.duration} step="0.1" value={time} onChange={(e) => scrubTo(Number(e.target.value))}/>{cutLayer}</div>
+    : <div className="timeline-graph systems-graph"><svg viewBox="0 0 700 96" preserveAspectRatio="none"><g className="frame-markers">{filmstripFrames.map((frame, i) => <line key={i} x1={frame.position * 700} x2={frame.position * 700} y1="0" y2="96"/>)}</g>{timelineSeries.map((series) => <path className={active.short === series.short ? "timeline-line active" : "timeline-line"} d={linePath(series.values, 700, 96)} fill="none" stroke={series.color} strokeWidth={active.short === series.short ? "2.6" : "1.5"} key={series.key}/>) }<line x1={playhead * 700} x2={playhead * 700} y1="0" y2="96" className="time-line"/></svg><input aria-label="System comparison timeline" type="range" min="0" max={analysis.duration} step="0.1" value={time} onChange={(e) => scrubTo(Number(e.target.value))}/>{cutLayer}</div>;
 
+  // Preview + aligned ribbon + frame strip. Rendered last in the deck so it
+  // stays pinned to the very bottom of the screen, beneath the segment queue.
+  const timelineRail = inCutMode ? <div className="deck-expand">
+    <div className="deck-preview" title={file?.name}>
+      {videoUrl && <><video ref={videoRef} className="deck-preview-video" src={videoUrl} muted playsInline onLoadedMetadata={onClipMeta}/>
+      <button type="button" className="stage-clip-replace" onClick={() => inputRef.current?.click()} aria-label="Replace video"><Icon name="upload" size={13}/></button></>}
+    </div>
+    <div className="deck-rails">
+      <div className="deck-graph in-rails">{ribbon}</div>
+      <section className="video-editor-strip" aria-label="Video frame timeline"><div className="editor-track"><i className="editor-playhead" style={{ left: `${playhead * 100}%` }}/>{(cuts.length > 0 || draftCut) && <div className="track-cuts">{cuts.map((c, i) => <span className="cut-band" key={i} style={{ left: `${(c.start / analysis.duration) * 100}%`, width: `${((c.end - c.start) / analysis.duration) * 100}%` }}/>) }{draftCut && <span className="cut-band draft" style={{ left: `${(draftCut.start / analysis.duration) * 100}%`, width: `${((draftCut.end - draftCut.start) / analysis.duration) * 100}%` }}/>}</div>}<div className="filmstrip">{filmstripFrames.map((frame, index) => { const inCut = cuts.some((c) => frame.time >= c.start - 1e-3 && frame.time < c.end); return <button className={`${Math.abs(time - frame.time) < analysis.duration / (FILMSTRIP_FRAME_COUNT * 2) ? "selected " : ""}${inCut ? "cut-frame" : ""}`} onClick={() => scrubTo(frame.time)} key={index} aria-label={`Seek to ${formatTime(frame.time)}${inCut ? " (trimmed)" : ""}`}><span className="frame-visual">{videoUrl ? <video src={`${videoUrl}#t=${frame.time.toFixed(2)}`} muted playsInline preload="metadata"/> : <i className={`sample-frame sample-frame-${index % 4}`}/>}</span></button>; })}</div></div></section>
+    </div>
+  </div> : null;
 
   return <main className="app-shell" style={activeScheme.tokens as CSSProperties}>
     <header className="topbar">
@@ -918,25 +948,45 @@ export default function Home() {
         {/* The single live annotation — low contrast, bottom-left */}
         <div className="stage-caption"><span className="pulse-ring"/><span>Now driving</span><b style={{ color: dominant.color }}>{dominant.name}</b></div>
 
-        {/* Stage tools float top-right. CorticalBrain renders its own RESET VIEW
-            (recentres the camera only); clearing the clip/analysis lives in the deck. */}
-        <button className="activity-toggle" onClick={() => setActivityOpen((o) => !o)} aria-expanded={activityOpen} aria-label="Activity feed"><span className="at-dot" data-on={logs.some((l) => l.status === "active") ? "1" : "0"}/>Activity{logs.length ? <em className="tnum">{logs.length}</em> : null}</button>
+        {/* One insight panel, shaped like the Activity drawer (sharp, flush right).
+            Toggles between Response systems (default) and the Activity log, and
+            auto-flips to Activity whenever a clip regeneration is running. */}
+        <aside className="insight-panel" aria-label={panelView === "activity" ? "Activity feed" : "Response systems"}>
+          <div className="panel-head" role="tablist" aria-label="Insight view">
+            <div className="panel-tabs">
+              <button role="tab" aria-selected={panelView === "systems"} className={panelView === "systems" ? "selected" : ""} onClick={() => setPanelView("systems")}>Response systems</button>
+              <button role="tab" aria-selected={panelView === "activity"} className={panelView === "activity" ? "selected" : ""} onClick={() => setPanelView("activity")}><span className="at-dot" data-on={logs.some((l) => l.status === "active") ? "1" : "0"}/>Activity{logs.length ? <em className="tnum">{logs.length}</em> : null}</button>
+            </div>
+            <span className="panel-head-key" aria-hidden>{panelView === "systems" ? "now · avg" : (logs.length ? `${logs.length} EVENT${logs.length > 1 ? "S" : ""}` : "READY")}</span>
+          </div>
 
-        {/* Systems dock: glanceable rows, tap to reveal anatomy + impact + trace (progressive disclosure) */}
-        <aside className="systems-dock" aria-label="Response systems">
-          <div className="dock-head"><span className="eyebrow">Response systems</span><span className="dock-head-key" aria-hidden>now&nbsp;·&nbsp;avg</span></div>
-          <div className="system-rows">{analysis.regions.map((region, index) => { const family = families.find((item) => item.short === region.short); const series = analysis.cognitiveSeries?.[family?.key ?? ""] ?? region.values; const live = Math.round(series[currentIndex] ?? 0); const avg = series.length ? Math.round(series.reduce((s, v) => s + v, 0) / series.length) : 0; const open = index === regionIndex; return <div className={`system-row ${open ? "open" : ""}`} key={region.short}>
-            <button className="system-row-head" onClick={() => setRegionIndex(index)} aria-expanded={open} aria-label={`${region.name}: now ${live}, average ${avg} out of 100`}>
-              <span className="sys-dot" style={{ background: region.color }}/><span className="sys-code">{region.short}</span><span className="sys-name">{region.name}</span>
-              <span className="sys-stats"><span className="sys-live tnum" style={{ color: region.color }}>{live}</span><span className="sys-avg tnum">{avg}</span></span>
-              <span className="sys-bar" title={`Overall average ${avg} / 100`}><i style={{ width: `${Math.max(0, Math.min(100, avg))}%`, background: region.color }}/></span>
-            </button>
-            {open && <div className="system-row-body">
-              <p className="sys-anatomy">{family?.anatomy}</p>
-              <p className="sys-impact">{family?.impact}</p>
-              <svg className="sys-spark" viewBox="0 0 240 40" preserveAspectRatio="none" aria-hidden><path className="chart-grid" d="M0 20H240"/><path d={linePath(region.values, 240, 38)} fill="none" stroke={region.color} strokeWidth="1.8"/><line x1={playhead * 240} x2={playhead * 240} y1="0" y2="40" className="time-line"/></svg>
+          {panelView === "systems"
+            ? <div className="system-rows">{analysis.regions.map((region, index) => { const family = families.find((item) => item.short === region.short); const series = analysis.cognitiveSeries?.[family?.key ?? ""] ?? region.values; const live = Math.round(series[currentIndex] ?? 0); const avg = series.length ? Math.round(series.reduce((s, v) => s + v, 0) / series.length) : 0; const open = index === regionIndex; return <div className={`system-row ${open ? "open" : ""}`} key={region.short}>
+              <button className="system-row-head" onClick={() => setRegionIndex(index)} aria-expanded={open} aria-label={`${region.name}: now ${live}, average ${avg} out of 100`}>
+                <span className="sys-dot" style={{ background: region.color }}/><span className="sys-code">{region.short}</span><span className="sys-name">{region.name}</span>
+                <span className="sys-stats"><span className="sys-live tnum" style={{ color: region.color }}>{live}</span><span className="sys-avg tnum">{avg}</span></span>
+                <span className="sys-bar" title={`Overall average ${avg} / 100`}><i style={{ width: `${Math.max(0, Math.min(100, avg))}%`, background: region.color }}/></span>
+              </button>
+              {open && <div className="system-row-body">
+                <p className="sys-anatomy">{family?.anatomy}</p>
+                <p className="sys-impact">{family?.impact}</p>
+                <svg className="sys-spark" viewBox="0 0 240 40" preserveAspectRatio="none" aria-hidden><path className="chart-grid" d="M0 20H240"/><path d={linePath(region.values, 240, 38)} fill="none" stroke={region.color} strokeWidth="1.8"/><line x1={playhead * 240} x2={playhead * 240} y1="0" y2="40" className="time-line"/></svg>
+              </div>}
+            </div>; })}</div>
+            : <div className="chat-log">
+              {logs.length === 0
+                ? <div className="chat-empty">Generation logs stream here — TRIBE&nbsp;v2 analysis and clip regenerations report live as they run.</div>
+                : logs.map((log) => <div className={`log-row ${log.status}`} key={log.id}>
+                    <span className="log-icon">{log.status === "active" ? <span className="log-spinner"/> : <Icon name={log.status === "done" ? "check" : log.status === "note" ? "info" : "close"} size={12}/>}</span>
+                    <div className="log-body">
+                      <div className="log-head"><b>{log.title}</b><time>{new Date(log.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time></div>
+                      {log.detail && <p>{log.detail}</p>}
+                      {log.status === "active" && log.bar && <span className="log-bar"><i/></span>}
+                      {log.href && <a className="log-download" href={log.href} download>{log.linkLabel ?? "Download mp4"}</a>}
+                    </div>
+                  </div>)}
+              <div ref={logEndRef}/>
             </div>}
-          </div>; })}</div>
         </aside>
 
         {/* Empty / loading / offline states — calm, on the stage */}
@@ -958,17 +1008,6 @@ export default function Home() {
       {/* ── Editor deck: a slim transport + net ribbon by default; expands into the frame strip + segments in cut mode ── */}
       <div className={`editor-deck ${(spliceMode || cuts.length > 0) ? "cut" : ""}`}>
         <div className="deck-bar">
-          {videoUrl && <div className="stage-clip" title={file?.name}>
-            <video ref={videoRef} className="stage-clip-video" src={videoUrl} muted playsInline onLoadedMetadata={(e) => {
-              const d = e.currentTarget.duration || 0;
-              setVideoDuration(d);
-              videoDurationRef.current = d;
-              // Patch the duration onto whatever analysis is already showing
-              // (covers metadata arriving after prediction has resolved).
-              if (d && Number.isFinite(d)) setAnalysis((a) => (Math.abs(a.duration - d) < 0.05 ? a : { ...a, duration: d, peak: { ...a.peak, time: a.duration ? (a.peak.time / a.duration) * d : 0 } }));
-            }}/>
-            <button type="button" className="stage-clip-replace" onClick={() => inputRef.current?.click()} aria-label="Replace video"><Icon name="upload" size={11}/></button>
-          </div>}
           <button className="play-button" onClick={() => setPlaying(!isPlaying)}><Icon name={isPlaying ? "pause" : "play"} size={16}/>{isPlaying ? "Pause" : (videoUrl ? "Play" : "Play")}</button>
           <span className="deck-time"><b className="tnum">{time.toFixed(1)}</b><small>s</small> <i>/ {formatTime(analysis.duration)}</i></span>
           {(spliceMode || cuts.length > 0) && <span className="deck-cuts">{cuts.length ? `${cuts.length} cut${cuts.length > 1 ? "s" : ""} · ${trimmedDuration.toFixed(1)}s left` : "Drag the ribbon to cut"}{cuts.length > 0 && <button className="splice-clear" onClick={() => setCuts([])}>Clear</button>}</span>}
@@ -978,19 +1017,17 @@ export default function Home() {
           {videoUrl && <button className="deck-clear" onClick={reset} title="Clear this clip and start over">Clear</button>}
         </div>
 
-        <div className="deck-graph">
-          {timelineMode === "net"
-            ? <div className={`timeline-graph net-graph ${showLiftPoints ? "showing-lift-points" : ""}`}><svg viewBox="0 0 700 96" preserveAspectRatio="none"><defs><linearGradient id="deckAreaFill" x1="0" x2="0" y1="0" y2="1"><stop stopColor="var(--chart-fill)" stopOpacity=".22"/><stop offset="1" stopColor="var(--chart-fill)" stopOpacity="0"/></linearGradient></defs><g className="frame-markers">{filmstripFrames.map((frame, i) => <line key={i} x1={frame.position * 700} x2={frame.position * 700} y1="0" y2="96"/>)}</g><path d={`${linePath(analysis.global, 700, 96)} L700,96 L0,96 Z`} fill="url(#deckAreaFill)"/><path d={linePath(analysis.global, 700, 96)} fill="none" stroke="var(--chart-line)" strokeWidth="2"/>{showLiftPoints && <g className="lift-point-lines">{liftPoints.map((point) => <path key={`${point.startIndex}-${point.endIndex}`} d={lineSegmentPath(analysis.global, point.startIndex, point.endIndex, 700, 96)} fill="none"/>)}</g>}<line x1={playhead * 700} x2={playhead * 700} y1="0" y2="96" className="time-line"/></svg><input aria-label="Net engagement timeline" type="range" min="0" max={analysis.duration} step="0.1" value={time} onChange={(e) => scrubTo(Number(e.target.value))}/>{cutLayer}</div>
-            : <div className="timeline-graph systems-graph"><svg viewBox="0 0 700 96" preserveAspectRatio="none"><g className="frame-markers">{filmstripFrames.map((frame, i) => <line key={i} x1={frame.position * 700} x2={frame.position * 700} y1="0" y2="96"/>)}</g>{timelineSeries.map((series) => <path className={active.short === series.short ? "timeline-line active" : "timeline-line"} d={linePath(series.values, 700, 96)} fill="none" stroke={series.color} strokeWidth={active.short === series.short ? "2.6" : "1.5"} key={series.key}/>) }<line x1={playhead * 700} x2={playhead * 700} y1="0" y2="96" className="time-line"/></svg><input aria-label="System comparison timeline" type="range" min="0" max={analysis.duration} step="0.1" value={time} onChange={(e) => scrubTo(Number(e.target.value))}/>{cutLayer}</div>}
-        </div>
+        {!inCutMode && <div className="deck-graph-row">
+          {videoUrl && <div className="deck-preview slim" title={file?.name}>
+            <video ref={videoRef} className="deck-preview-video" src={videoUrl} muted playsInline onLoadedMetadata={onClipMeta}/>
+            <button type="button" className="stage-clip-replace" onClick={() => inputRef.current?.click()} aria-label="Replace video"><Icon name="upload" size={12}/></button>
+          </div>}
+          <div className="deck-graph">{ribbon}</div>
+        </div>}
 
-        {(spliceMode || cuts.length > 0) && <div className="deck-expand">
-          <section className="video-editor-strip" aria-label="Video frame timeline"><div className="editor-track"><i className="editor-playhead" style={{ left: `${playhead * 100}%` }}/>{(cuts.length > 0 || draftCut) && <div className="track-cuts">{cuts.map((c, i) => <span className="cut-band" key={i} style={{ left: `${(c.start / analysis.duration) * 100}%`, width: `${((c.end - c.start) / analysis.duration) * 100}%` }}/>) }{draftCut && <span className="cut-band draft" style={{ left: `${(draftCut.start / analysis.duration) * 100}%`, width: `${((draftCut.end - draftCut.start) / analysis.duration) * 100}%` }}/>}</div>}<div className="filmstrip">{filmstripFrames.map((frame, index) => { const inCut = cuts.some((c) => frame.time >= c.start - 1e-3 && frame.time < c.end); return <button className={`${Math.abs(time - frame.time) < analysis.duration / (FILMSTRIP_FRAME_COUNT * 2) ? "selected " : ""}${inCut ? "cut-frame" : ""}`} onClick={() => scrubTo(frame.time)} key={index} aria-label={`Seek to ${formatTime(frame.time)}${inCut ? " (trimmed)" : ""}`}><span className="frame-visual">{videoUrl ? <video src={`${videoUrl}#t=${frame.time.toFixed(2)}`} muted playsInline preload="metadata"/> : <i className={`sample-frame sample-frame-${index % 4}`}/>}</span></button>; })}</div></div></section>
-          <div className="deck-segments">
-            <div className="deck-seg-head"><span className="eyebrow">Segments to regenerate</span><span className="deck-seg-actions">{regenerableCount > 1 && <button className="segments-regen-all" onClick={regenerateAll} title="Generate takes for every prepared segment at once">Regenerate all ({regenerableCount})</button>}{segments.length > 0 && <span className="segments-count tnum">{segments.length}</span>}</span></div>
-            {segments.length === 0
-              ? <p className="deck-seg-empty">{spliceMode ? "Drag across the ribbon to cut a slot. Each cut queues here for regeneration." : "Turn on Splice, then drag the ribbon to cut a slot for AI regeneration."}</p>
-              : <div className="segment-list">{segments.map((seg, i) => {
+        {inCutMode && segments.length > 0 && <div className="deck-segments">
+            {regenerableCount > 1 && <div className="deck-seg-head"><span className="deck-seg-actions"><button className="segments-regen-all" onClick={regenerateAll} title="Generate takes for every prepared segment at once">Regenerate all ({regenerableCount})</button><span className="segments-count tnum">{segments.length}</span></span></div>}
+            <div className="segment-list">{segments.map((seg, i) => {
                   const factor = videoDuration > 0 ? videoDuration / analysis.duration : 1;
                   const key = `${seg.start}-${seg.end}`;
                   const variants = regenJobs[key]?.variants ?? [];
@@ -1012,29 +1049,11 @@ export default function Home() {
                       <button className="segment-remove" onClick={() => removeCut(cuts.indexOf(seg))} aria-label="Remove segment"><Icon name="close" size={13}/></button>
                     </div>
                     {busy && liveLog ? <small className="segment-logtail" title={liveLog}>{liveLog.trim().split("\n").filter(Boolean).slice(-1)[0]?.slice(0, 140)}</small> : null}
-                  </div>; })}</div>}
-          </div>
+                  </div>; })}</div>
         </div>}
-      </div>
 
-      {/* ── Activity drawer — slides in over the stage when asked ── */}
-      {activityOpen && <aside className="activity-drawer" aria-label="Activity feed">
-        <div className="drawer-head"><span className="eyebrow">Activity</span><span className="log-count">{logs.length ? `${logs.length} EVENT${logs.length > 1 ? "S" : ""}` : "READY"}</span><button className="icon-button" onClick={() => setActivityOpen(false)} aria-label="Close activity"><Icon name="close" size={15}/></button></div>
-        <div className="chat-log">
-          {logs.length === 0
-            ? <div className="chat-empty">Generation logs stream here — TRIBE&nbsp;v2 analysis and clip regenerations report live as they run.</div>
-            : logs.map((log) => <div className={`log-row ${log.status}`} key={log.id}>
-                <span className="log-icon">{log.status === "active" ? <span className="log-spinner"/> : <Icon name={log.status === "done" ? "check" : log.status === "note" ? "info" : "close"} size={12}/>}</span>
-                <div className="log-body">
-                  <div className="log-head"><b>{log.title}</b><time>{new Date(log.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time></div>
-                  {log.detail && <p>{log.detail}</p>}
-                  {log.status === "active" && log.bar && <span className="log-bar"><i/></span>}
-                  {log.href && <a className="log-download" href={log.href} download>{log.linkLabel ?? "Download mp4"}</a>}
-                </div>
-              </div>)}
-          <div ref={logEndRef}/>
-        </div>
-      </aside>}
+        {timelineRail}
+      </div>
     </section>}
 
     {stage === "create" && <footer><span>Population-model estimate from facebook/tribev2 · not an individual measurement or diagnosis.</span><button className="footer-link" onClick={() => setShowInfo(true)}>How this works</button></footer>}
