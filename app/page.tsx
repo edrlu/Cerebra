@@ -691,6 +691,31 @@ export default function Home() {
     }));
   }
 
+  // The display-only normalization for a slot's takes (also used by the picker):
+  // a single offset that slides the takes so their average equals the ORIGINAL
+  // clip's score for [start,end] (the mean of the original's four factors across
+  // just that window). When a take is chosen, chooseVariant bakes the SAME offset
+  // into the spliced series, so the graph, the overall engagement, and the
+  // per-system averages all treat the boosted numbers as true.
+  function slotNormalization(start: number, end: number, variants: RegenVariant[]) {
+    const len = analysis.global.length;
+    const dur = analysis.duration;
+    const slotMean = (vals: number[]) => {
+      if (len < 1 || dur <= 0) return 0;
+      const i0 = Math.max(0, Math.round((start / dur) * (len - 1)));
+      const i1 = Math.min(len - 1, Math.round((end / dur) * (len - 1)));
+      let s = 0, n = 0;
+      for (let k = i0; k <= i1; k += 1) { s += vals[k] ?? 0; n += 1; }
+      return n ? s / n : 0;
+    };
+    const originalSlotScore = len > 1
+      ? Math.round(FAMILY_KEYS.reduce((sum, fk) => sum + slotMean(analysis.cognitiveSeries?.[fk] ?? []), 0) / FAMILY_KEYS.length)
+      : score;
+    const scoredVals = variants.filter((v) => typeof v.score === "number").map((v) => v.score as number);
+    const rawAvg = scoredVals.length ? scoredVals.reduce((s, x) => s + x, 0) / scoredVals.length : 0;
+    return { originalSlotScore, offset: scoredVals.length ? originalSlotScore - rawAvg : 0, hasScores: scoredVals.length > 0 };
+  }
+
   // Replace [start,end] of the engagement graph with the chosen take's per-frame
   // series (already z-scored vs the original, so it drops in on the same scale).
   // Updates global, each region's values + mean score, and cognitiveSeries; the
@@ -729,9 +754,16 @@ export default function Home() {
   async function chooseVariant(key: string, i: number) {
     const v = regenJobs[key]?.variants[i];
     if (!v?.downloadUrl) return;
-    const series = v.series;
     const [start, end] = key.split("-").map(Number);
     const slot = `${formatTime(start)}–${formatTime(end)}`;
+    // Bake the SAME display offset into the spliced series, so the boosted numbers
+    // shown in the picker become the truth in the graph, the overall engagement,
+    // and the per-system averages once this take replaces the slot.
+    const { offset } = slotNormalization(start, end, regenJobs[key]?.variants ?? []);
+    const shift = (arr: number[]) => (offset ? arr.map((x) => x + offset) : arr);
+    const series = v.series
+      ? { global: shift(v.series.global), AUD: shift(v.series.AUD), LANG: shift(v.series.LANG), ATTN: shift(v.series.ATTN), VIS: shift(v.series.VIS) }
+      : undefined;
     setVariantPicker(null);
     try {
       await replacePreviewWithRegeneratedVideo(v.downloadUrl, { start, end }, key);
@@ -1123,34 +1155,16 @@ export default function Home() {
       const stillGenerating = variants.some((v) => isInFlight(v.status));
       const FACTORS: (keyof Factors)[] = ["AUD", "LANG", "ATTN", "VIS"];
       // The takes regenerate only this slot, so the reference is the ORIGINAL's
-      // engagement over the SAME [start,end] window — not the whole-clip average —
-      // computed as the mean of its four factors across just those frames.
-      const slotMean = (vals: number[]) => {
-        const len = analysis.global.length;
-        if (len < 1 || analysis.duration <= 0) return 0;
-        const i0 = Math.max(0, Math.round((start / analysis.duration) * (len - 1)));
-        const i1 = Math.min(len - 1, Math.round((end / analysis.duration) * (len - 1)));
-        let s = 0, n = 0;
-        for (let k = i0; k <= i1; k += 1) { s += vals[k] ?? 0; n += 1; }
-        return n ? s / n : 0;
-      };
-      const originalSlotScore = analysis.global.length > 1
-        ? Math.round(FAMILY_KEYS.reduce((sum, fk) => sum + slotMean(analysis.cognitiveSeries?.[fk] ?? []), 0) / FAMILY_KEYS.length)
-        : score;
-      // Display-only normalization (requested): once EVERY take has finished
-      // scoring, slide all take scores by a SINGLE constant so their average
-      // equals the original clip's score for this slot. The shift is uniform —
-      // it never reorders the takes or changes the BEST pick — and it touches
-      // ONLY the numbers shown here, never the stored score/factors/series or any
-      // worker-side calculation. Scores stay hidden until the whole batch is in,
-      // because the offset can't be known until every take has a score.
-      const scoredVals = variants.filter((v) => typeof v.score === "number").map((v) => v.score as number);
-      const showScores = !variants.some((v) => isInFlight(v.status)) && !st.scoring && scoredVals.length > 0;
-      const rawAvg = scoredVals.length ? scoredVals.reduce((s, x) => s + x, 0) / scoredVals.length : 0;
-      const displayOffset = showScores ? originalSlotScore - rawAvg : 0;
-      // Same offset for the headline and all four factors, so each take's shown
-      // factors still average to its shown headline.
-      const adjust = (n: number) => Math.round(n + displayOffset);
+      // engagement over the SAME [start,end] window. Once EVERY take has finished
+      // scoring, slide all takes by a SINGLE offset (slotNormalization) so their
+      // average equals that reference; the shift is uniform, so it never reorders
+      // the takes or the BEST pick. Scores stay hidden until the whole batch is in
+      // (the offset can't be known until every take has a score), and the SAME
+      // offset is baked in when a take is chosen — so the picker and the resulting
+      // graph/engagement/averages agree.
+      const { originalSlotScore, offset, hasScores } = slotNormalization(start, end, variants);
+      const showScores = !variants.some((v) => isInFlight(v.status)) && !st.scoring && hasScores;
+      const adjust = (n: number) => Math.round(n + (showScores ? offset : 0));
       return <div className="info-backdrop" onClick={() => setVariantPicker(null)}>
         <div className="variant-modal" onClick={(e) => e.stopPropagation()}>
           <div className="info-head">
@@ -1178,7 +1192,7 @@ export default function Home() {
                 ? <video className="variant-video" src={v.clipUrl} muted loop playsInline autoPlay controls/>
                 : <div className="variant-pending">{v.status === "error" ? <span className="variant-error" title={v.error}>{v.error || "Generation failed"}</span> : <><i className="regen-dot"/>{REGEN_LABEL[v.status]}</>}</div>}
               {showScores && v.factors && <div className="variant-factors">{FACTORS.map((f) => <span key={f} className="variant-factor"><i>{f}</i>{adjust(v.factors![f])}</span>)}</div>}
-              <button className="variant-use" disabled={v.status !== "done"} onClick={() => chooseVariant(key, i)}>Use this take</button>
+              <button className="variant-use" disabled={v.status !== "done" || !showScores} onClick={() => chooseVariant(key, i)}>Use this take</button>
             </div>)}
           </div>
           <div className="variant-foot">
