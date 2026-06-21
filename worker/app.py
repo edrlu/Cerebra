@@ -638,6 +638,8 @@ async def score_takes(referenceId: str = Form(...), takes: list[UploadFile] = Fi
                 "series": {"global": resp["global"], **{r["short"]: r["values"] for r in resp["regions"]}},
             })
 
+    if not out:
+        raise HTTPException(status_code=400, detail="No takes could be scored.")
     best = max(range(len(out)), key=lambda i: out[i]["score"])
     average = round(sum(t["score"] for t in out) / len(out), 1)
     return {"best": out[best]["takeIndex"], "average": average, "takes": out}
