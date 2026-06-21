@@ -153,12 +153,26 @@ rm -rf "$NEXT_DIST_DIR"
 # Clip-regeneration worker: watches regen/<id>/job.json for queued cuts and
 # drives the Pika/Seedance generation through a headless agent CLI (claude OR
 # codex — chosen per-job in the UI; see REGENERATE.md). Start it if EITHER CLI
-# is installed (no hard-coded codex). REGEN_AGENTS lists the installed CLIs and
-# is exported so the app rejects a regenerate request up front with a clear error
-# instead of queuing a job nothing can pick up.
+# is usable. Each agent resolves to a global binary, or `npx --no-install <bin>`
+# for non-global (local / npx-cache) installs (no surprise downloads); the
+# resolved invocation is exported as REGEN_<AGENT>_CMD for the worker, and
+# REGEN_AGENTS lists which agents are usable so the app can reject the rest up
+# front with a clear error instead of queuing a job nothing can pick up.
 REGEN_AGENTS=""
-command -v claude >/dev/null 2>&1 && REGEN_AGENTS="claude"
-command -v codex  >/dev/null 2>&1 && REGEN_AGENTS="${REGEN_AGENTS:+$REGEN_AGENTS,}codex"
+resolve_agent() {  # $1=binary  $2=CMD-var suffix (e.g. CLAUDE -> REGEN_CLAUDE_CMD)
+  local bin="$1"
+  if command -v "$bin" >/dev/null 2>&1; then
+    export "REGEN_${2}_CMD=$bin"
+  elif command -v npx >/dev/null 2>&1 && npx --no-install "$bin" --version >/dev/null 2>&1; then
+    export "REGEN_${2}_CMD=npx --no-install $bin"
+    info "Using 'npx --no-install $bin' (no global '$bin' found)"
+  else
+    return 0
+  fi
+  REGEN_AGENTS="${REGEN_AGENTS:+$REGEN_AGENTS,}$bin"
+}
+resolve_agent claude CLAUDE
+resolve_agent codex CODEX
 export REGEN_AGENTS
 if [[ -n "$REGEN_AGENTS" ]]; then
   REGEN_WORKER_LOG="$ROOT_DIR/.regen-worker-${NEXT_PORT}.log"

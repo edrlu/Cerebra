@@ -144,7 +144,18 @@ function runAgent(job, dir, dlog) {
       summary = `codex exec --cd ${ROOT} --dangerously-bypass-approvals-and-sandbox <prompt:${prompt.length}c>${MODEL ? ` --model ${MODEL}` : ""}`;
     }
 
-    dlog(`SPAWN agent=${agent}: ${summary}`);
+    // Non-global installs: run.sh sets REGEN_CLAUDE_CMD / REGEN_CODEX_CMD to the
+    // resolved invocation (e.g. "npx --no-install claude"). Split on whitespace so
+    // multi-token commands run correctly: cmd becomes "npx" and the leading tokens
+    // are prepended to args.
+    const baseCmd = (agent === "claude" ? process.env.REGEN_CLAUDE_CMD : process.env.REGEN_CODEX_CMD) || cmd;
+    const baseParts = baseCmd.split(/\s+/).filter(Boolean);
+    if (baseParts.length) {
+      cmd = baseParts[0];
+      if (baseParts.length > 1) args = [...baseParts.slice(1), ...args];
+    }
+
+    dlog(`SPAWN agent=${agent} via "${baseCmd}": ${summary}`);
     const t = Date.now();
     const child = spawn(cmd, args, { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"], env: process.env });
     dlog(`agent pid=${child.pid}`);
