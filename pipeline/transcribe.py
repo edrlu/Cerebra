@@ -12,6 +12,8 @@ from functools import lru_cache
 
 from .config import settings
 
+_openai_quota_exhausted = False
+
 
 class TranscriptionUnavailable(RuntimeError):
     pass
@@ -46,8 +48,33 @@ def _transcribe_local(audio_path: str) -> str:
     return " ".join(seg.text.strip() for seg in segments).strip()
 
 
+def transcribe_with_engine(audio_path: str) -> tuple[str, str]:
+    """Return the transcription and the Whisper engine that produced it."""
+    global _openai_quota_exhausted
+
+    if settings.whisper_available and not _openai_quota_exhausted:
+        try:
+            return _transcribe_openai(audio_path), "openai-whisper"
+        except Exception as exc:
+            code = getattr(exc, "code", None)
+            body = getattr(exc, "body", None)
+            if isinstance(body, dict):
+                nested = body.get("error")
+                nested_code = nested.get("code") if isinstance(nested, dict) else None
+                code = body.get("code") or nested_code or code
+            if code == "insufficient_quota":
+                _openai_quota_exhausted = True
+            try:
+                return _transcribe_local(audio_path), "faster-whisper"
+            except TranscriptionUnavailable:
+                raise TranscriptionUnavailable(
+                    "OpenAI Whisper is unavailable and local faster-whisper is not installed."
+                ) from exc
+
+    return _transcribe_local(audio_path), "faster-whisper"
+
+
 def transcribe(audio_path: str) -> str:
     """Transcribe an audio file to a single brief string."""
-    if settings.whisper_available:
-        return _transcribe_openai(audio_path)
-    return _transcribe_local(audio_path)
+    text, _ = transcribe_with_engine(audio_path)
+    return text

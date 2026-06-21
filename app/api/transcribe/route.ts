@@ -1,47 +1,61 @@
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 /**
- * Voice → text gateway. Uses OpenAI Whisper directly when OPENAI_API_KEY is
- * present; otherwise the Studio can still work with typed briefs.
+ * Voice → text gateway. The Python pipeline prefers OpenAI Whisper and falls
+ * back to local faster-whisper when the API project is out of quota.
  */
 export async function POST(request: Request) {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
+  const pipelineUrl = process.env.CEREBRA_OPTIMIZER_URL;
+  if (!pipelineUrl) {
     return NextResponse.json(
-      { error: "Voice transcription needs OPENAI_API_KEY. You can still type the brief." },
+      { error: "Voice transcription pipeline is not configured." },
       { status: 503 },
     );
   }
 
   try {
-    const incoming = await request.formData();
-    const audio = incoming.get("audio");
-    if (!(audio instanceof File)) {
-      return NextResponse.json({ error: "No audio file provided." }, { status: 422 });
+    const contentType = request.headers.get("content-type") ?? "application/octet-stream";
+    const body = Buffer.from(await request.arrayBuffer());
+    const upstream = await fetch(`${pipelineUrl.replace(/\/$/, "")}/transcribe`, {
+      method: "POST",
+      headers: { "content-type": contentType },
+      body,
+      signal: AbortSignal.timeout(295_000),
+    });
+    const responseBody = await upstream.arrayBuffer();
+    if (!upstream.ok) {
+      let message = `Whisper transcription failed (${upstream.status}).`;
+      try {
+        const parsed = JSON.parse(new TextDecoder().decode(responseBody)) as {
+          error?: string | { message?: string };
+          detail?: string | { message?: string };
+        };
+        const detail = parsed.error ?? parsed.detail;
+        if (typeof detail === "string") message = detail;
+        else if (detail?.message) message = detail.message;
+      } catch {
+        // Keep the status-based fallback.
+      }
+      return NextResponse.json({ error: message }, {
+        status: upstream.status,
+        headers: { "cache-control": "no-store" },
+      });
     }
 
-    const outgoing = new FormData();
-    outgoing.append("model", process.env.CEREBRA_WHISPER_MODEL || "whisper-1");
-    outgoing.append("file", audio, audio.name || "clip.webm");
-
-    const upstream = await fetch("https://api.openai.com/v1/audio/transcriptions", {
-      method: "POST",
-      headers: { authorization: `Bearer ${apiKey}` },
-      body: outgoing,
-      signal: AbortSignal.timeout(115_000),
-    });
-    return new NextResponse(await upstream.arrayBuffer(), {
+    return new NextResponse(responseBody, {
       status: upstream.status,
       headers: {
         "content-type": upstream.headers.get("content-type") ?? "application/json",
         "cache-control": "no-store",
       },
     });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Transcription failed";
-    return NextResponse.json({ error: message }, { status: 502 });
+  } catch {
+    return NextResponse.json(
+      { error: "Voice transcription pipeline is unavailable. Make sure it is running on port 8100." },
+      { status: 502 },
+    );
   }
 }

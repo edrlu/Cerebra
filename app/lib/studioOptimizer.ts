@@ -327,12 +327,12 @@ export function studioHealth() {
       external_service_required: false,
     },
     redis: {
-      connected: true,
-      endpoint: "in-process",
+      connected: false,
+      endpoint: "pipeline unavailable",
       cloud: false,
-      search_available: true,
+      search_available: false,
       knowledge_index: "local_ad_knowledge",
-      index_ready: true,
+      index_ready: false,
       document_count: SEED_DOCS.length,
     },
   };

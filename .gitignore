@@ -60,3 +60,8 @@ yarn-error.log*
 /skills-lock.json
 __pycache__/
 next-env.d.ts
+
+# local creds, model binary, tooling
+pipeline/.pika_creds.json
+yolov8n.pt
+.codex/
