@@ -669,6 +669,14 @@ export default function Home() {
     }
   }
 
+  // Discard all takes for a slot and keep the original untouched. The segment
+  // stays so the user can regenerate again.
+  function rejectAll(key: string) {
+    setVariantPicker(null);
+    autoOpenedRef.current.delete(key);
+    setRegenJobs((prev) => { const next = { ...prev }; delete next[key]; return next; });
+  }
+
   // Once a batch finishes generating, score all takes against the ORIGINAL in one
   // run-level pass, then reveal the picker with scores. No clip is shown without
   // its score. If the original was never scored by the live model (demo fallback,
@@ -961,22 +969,44 @@ export default function Home() {
 
     {variantPicker && regenJobs[variantPicker] && (() => {
       const key = variantPicker;
+      const st = regenJobs[key];
       const [start, end] = key.split("-").map(Number);
       const slot = `${formatTime(start)} – ${formatTime(end)}`;
-      const variants = regenJobs[key].variants;
+      const variants = st.variants;
       const stillGenerating = variants.some((v) => isInFlight(v.status));
+      const FACTORS: (keyof Factors)[] = ["AUD", "LANG", "ATTN", "VIS"];
       return <div className="info-backdrop" onClick={() => setVariantPicker(null)}>
         <div className="variant-modal" onClick={(e) => e.stopPropagation()}>
-          <div className="info-head"><h2>Choose a take · {slot}</h2><button className="icon-button" onClick={() => setVariantPicker(null)} aria-label="Close"><Icon name="close" size={18}/></button></div>
-          <p className="variant-sub">{VARIANT_COUNT} independent AI takes of this slot{stillGenerating ? " — still generating, takes appear as they finish." : ". Pick the one to splice in."}</p>
+          <div className="info-head">
+            <h2>Choose a take · {slot}</h2>
+            <div className="variant-head-right">
+              {typeof st.average === "number" && <span className="variant-avg" title="Average headline (mean of the 4 factors) across the takes">avg {st.average} vs original</span>}
+              <button className="icon-button" onClick={() => setVariantPicker(null)} aria-label="Close"><Icon name="close" size={18}/></button>
+            </div>
+          </div>
+          <p className="variant-sub">
+            {VARIANT_COUNT} AI takes of this slot, each scored vs the original (50 = original baseline).
+            {stillGenerating ? " Still generating — takes appear as they finish." : st.scoring ? " Scoring against the original…" : " Pick one to splice in."}
+          </p>
           <div className="variant-grid">
-            {variants.map((v, i) => <div className={`variant-card ${v.status}`} key={i}>
-              <div className="variant-head"><span>Take {i + 1}</span><span className="variant-labels">{v.status === "done" && typeof v.score === "number" && <b className="variant-score" title="Filler model grade" aria-label={`Filler model grade ${v.score} out of 100`}>{v.score}</b>}{v.status === "done" ? <em className="ok">ready</em> : v.status === "error" ? <em className="bad">failed</em> : <em>{REGEN_LABEL[v.status]}</em>}</span></div>
+            {variants.map((v, i) => <div className={`variant-card ${v.status} ${st.best === i && st.scored ? "best" : ""}`} key={i}>
+              <div className="variant-head">
+                <span>Take {i + 1}{st.best === i && st.scored ? <b className="variant-best" title="Best overall across the 4 factors"> · BEST</b> : null}</span>
+                <span className="variant-labels">
+                  {st.scoring && v.status === "done" && typeof v.score !== "number" && <em>scoring…</em>}
+                  {typeof v.score === "number" && <b className="variant-score" title="Headline: mean of the 4 factors, vs the original baseline of 50" aria-label={`Score ${v.score}, baseline 50`}>{v.score}</b>}
+                  {v.status === "done" ? <em className="ok">ready</em> : v.status === "error" ? <em className="bad">failed</em> : <em>{REGEN_LABEL[v.status]}</em>}
+                </span>
+              </div>
               {v.status === "done" && v.clipUrl
                 ? <video className="variant-video" src={v.clipUrl} muted loop playsInline autoPlay controls/>
                 : <div className="variant-pending">{v.status === "error" ? <span className="variant-error" title={v.error}>{v.error || "Generation failed"}</span> : <><i className="regen-dot"/>{REGEN_LABEL[v.status]}</>}</div>}
+              {v.factors && <div className="variant-factors">{FACTORS.map((f) => <span key={f} className="variant-factor"><i>{f}</i>{Math.round(v.factors![f])}</span>)}</div>}
               <button className="variant-use" disabled={v.status !== "done"} onClick={() => chooseVariant(key, i)}>Use this take</button>
             </div>)}
+          </div>
+          <div className="variant-foot">
+            <button className="variant-reject" onClick={() => rejectAll(key)}>Reject all · keep original</button>
           </div>
         </div>
       </div>;
