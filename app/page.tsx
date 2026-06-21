@@ -669,6 +669,39 @@ export default function Home() {
     }
   }
 
+  // Once a batch finishes generating, score all takes against the ORIGINAL in one
+  // run-level pass, then reveal the picker with scores. No clip is shown without
+  // its score. If the original was never scored by the live model (demo fallback,
+  // no referenceId), open the picker unscored rather than blocking.
+  async function scoreBatch(key: string) {
+    const st = regenJobs[key];
+    const runId = st?.runId;
+    const referenceId = analysis.referenceId;
+    if (!runId || !referenceId) { setVariantPicker(key); return; }
+    setRegenJobs((prev) => (prev[key] ? { ...prev, [key]: { ...prev[key], scoring: true } } : prev));
+    setVariantPicker(key);
+    try {
+      const res = await fetch("/api/regenerate/score", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ runId, referenceId }),
+      });
+      if (!res.ok) throw new Error("scoring request failed");
+      const data: { best: number; average: number; takes: { takeIndex: number; score: number; factors: Factors; series: TakeSeries }[] } = await res.json();
+      setRegenJobs((prev) => {
+        const cur = prev[key];
+        if (!cur) return prev;
+        const variants = cur.variants.slice();
+        for (const t of data.takes) {
+          if (variants[t.takeIndex]) variants[t.takeIndex] = { ...variants[t.takeIndex], score: t.score, factors: t.factors, series: t.series };
+        }
+        return { ...prev, [key]: { ...cur, variants, scoring: false, scored: true, best: data.best, average: data.average } };
+      });
+    } catch {
+      setRegenJobs((prev) => (prev[key] ? { ...prev, [key]: { ...prev[key], scoring: false } } : prev));
+    }
+  }
+
   // Poll every in-flight variant until its agent finishes generation + merge.
   useEffect(() => {
     const active: { key: string; i: number; v: RegenVariant }[] = [];
@@ -695,7 +728,6 @@ export default function Home() {
           if (job.status !== v.status || job.logTail !== v.logTail) {
             updateVariant(key, i, {
               status: job.status, error: job.error, logTail: job.logTail, logUrl: job.logUrl,
-              score: job.score,
               clipUrl: job.status === "done" ? `/api/regenerate/file?job=${v.jobId}&name=clip.mp4` : v.clipUrl,
               downloadUrl: job.status === "done" ? `/api/regenerate/file?job=${v.jobId}&name=final.mp4` : v.downloadUrl,
             });
@@ -710,16 +742,15 @@ export default function Home() {
     return () => clearInterval(id);
   }, [regenJobs, updateVariant]);
 
-  // When a batch finishes (nothing in flight) with at least one good take, open
-  // the picker once so the user can choose without hunting for a button.
+  // When a batch finishes (nothing in flight) with at least one good take, score
+  // it once (which opens the picker). The autoOpenedRef guard fires this once.
   useEffect(() => {
     for (const [key, st] of Object.entries(regenJobs)) {
       const anyFlight = st.variants.some((v) => isInFlight(v.status));
       const doneCount = st.variants.filter((v) => v.status === "done").length;
-      if (!anyFlight && doneCount > 0 && !autoOpenedRef.current.has(key)) {
-        autoOpenedRef.current.add(key);
-        setVariantPicker(key);
-      }
+      if (anyFlight || doneCount === 0 || autoOpenedRef.current.has(key)) continue;
+      autoOpenedRef.current.add(key);
+      void scoreBatch(key);
     }
   }, [regenJobs]);
 
