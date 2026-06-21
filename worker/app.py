@@ -34,10 +34,12 @@ MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(1_000_000_000)))
 # Per-video prediction cache: each result is saved as <sha256-of-video>.json here,
 # so re-uploading the same clip returns instantly instead of re-running inference.
 PREDICTIONS_DIR = Path(os.getenv("TRIBEV2_PREDICTIONS_DIR", str(Path(__file__).resolve().parent.parent / "prediction_cache")))
-# Downscale uploads to this shorter-side height (px) before the encode loop. V-JEPA2
-# resizes frames to 256x256 anyway, so this leaves scores ~unchanged but makes frame
-# DECODING (the real bottleneck) far cheaper. Set TRIBEV2_DOWNSCALE=0 to disable.
-DOWNSCALE_TARGET = int(os.getenv("TRIBEV2_DOWNSCALE", "288"))
+# Downscale uploads so the shorter side is this many px before the encode loop. The
+# model's input is 256x256, so 256 matches it exactly (a single resample, closest to
+# the no-downscale result) and makes frame DECODING (the real bottleneck) far cheaper
+# with ~unchanged scores. Don't go below 256 (that forces upscaling, losing detail).
+# Set TRIBEV2_DOWNSCALE=0 to disable.
+DOWNSCALE_TARGET = int(os.getenv("TRIBEV2_DOWNSCALE", "256"))
 model: TribeModel | None = None
 
 
