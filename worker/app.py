@@ -78,10 +78,10 @@ ENGAGEMENT_FAMILIES = [
      "reliability": "medium", "rois": ["MT", "MST", "V4t", "FST", "LO*", "V3CD"]},
 ]
 
-# Within-video scale: a family-mean response this many SDs above the region's own
-# baseline maps to a score of 100. Fixed and shared across the four families so
-# they are directly comparable within a clip. (Cross-video comparability needs a
-# fixed reference set computed over many clips -- deferred to a later step.)
+# Within-video scale, centered on each region's own baseline: a family-mean of
+# 0 SD maps to 50, +ENGAGEMENT_Z_REF SD to 100, -ENGAGEMENT_Z_REF SD to 0. Fixed
+# and shared across the four families so they are directly comparable within a
+# clip. (Cross-video comparability needs a fixed reference set -- deferred.)
 ENGAGEMENT_Z_REF = 2.0
 
 
@@ -301,9 +301,9 @@ def build_response(predictions: np.ndarray) -> dict:
 
     Within-video, signed, per-vertex baseline: each vertex is z-scored against
     its OWN response over the clip, so a family trace reflects how far that
-    territory rises above its baseline (positive = engaged; deactivation is not
-    counted as engagement). Traces are parcel-balanced and placed on one fixed
-    0..100 scale (ENGAGEMENT_Z_REF) so the four families are directly comparable.
+    territory deviates from its baseline (50 = baseline, 100 = +ENGAGEMENT_Z_REF
+    SD, 0 = -ENGAGEMENT_Z_REF SD). Traces are parcel-balanced and placed on one
+    fixed 0..100 scale so the four families are directly comparable.
     All four are weighted equally; `reliability` is reported but never weights the
     score. Overall engagement is the equal-weighted mean of the four families.
     """
@@ -325,8 +325,8 @@ def build_response(predictions: np.ndarray) -> dict:
         # Mean within each parcel, then mean across parcels (parcel-balanced).
         parcel_means = [z[:, idx].mean(axis=1) for idx in parcels.values()]
         fam_z = np.mean(np.stack(parcel_means, axis=0), axis=0)
-        # Positive engagement only, on the fixed shared scale.
-        traces[i] = np.clip(100.0 * np.maximum(fam_z, 0.0) / ENGAGEMENT_Z_REF, 0, 100)
+        # Centered scale: baseline (0 SD) -> 50, +/-ENGAGEMENT_Z_REF SD -> 100/0.
+        traces[i] = np.clip(50.0 * (1.0 + fam_z / ENGAGEMENT_Z_REF), 0, 100)
 
     regions = []
     cognitive_series = {}
