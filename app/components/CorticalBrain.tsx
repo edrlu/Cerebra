@@ -6,9 +6,10 @@ import * as THREE from "three";
 type Hemisphere = { positions: number[]; indices: number[]; curvature?: number[]; families?: number[]; weights?: number[] };
 type Surface = { mesh: string; verticesPerHemisphere: number; hemispheres: { left: Hemisphere; right: Hemisphere } };
 
-// "Hot" activation colormap stops (low → high), the Meta/fMRI heat look:
-// deep red → red → orange → yellow → near-white.
-const HOT_STOPS = ["#4a0c02", "#c21e03", "#ff7a0f", "#ffce2e", "#fff4d6"];
+// Inferno activation colormap stops (low → high): perceptually uniform, the
+// only place colour lives on the brain. near-black → violet → magenta → orange
+// → amber → pale yellow. Quiet cortex stays near the anatomical grey.
+const HOT_STOPS = ["#000004", "#420A68", "#932667", "#DD513A", "#FCA50A", "#FCFFA4"];
 
 export function CorticalBrain({ familyLevels, intensity }: { familyLevels?: number[]; intensity: number }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -128,7 +129,7 @@ export function CorticalBrain({ familyLevels, intensity }: { familyLevels?: numb
             .replace("#include <common>", "#include <common>\nattribute float aFamily;\nattribute float aWeight;\nvarying float vFamily;\nvarying float vWeight;")
             .replace("#include <begin_vertex>", "#include <begin_vertex>\nvFamily = aFamily;\nvWeight = aWeight;");
           shader.fragmentShader = shader.fragmentShader
-            .replace("#include <common>", "#include <common>\nuniform vec4 uLevels;\nuniform float uTime;\nuniform vec3 uHot[5];\nvarying float vFamily;\nvarying float vWeight;\nvec3 hotMap(float t){\n  t = clamp(t, 0.0, 1.0);\n  float s = t * 4.0;\n  if (s < 1.0) return mix(uHot[0], uHot[1], s);\n  if (s < 2.0) return mix(uHot[1], uHot[2], s - 1.0);\n  if (s < 3.0) return mix(uHot[2], uHot[3], s - 2.0);\n  return mix(uHot[3], uHot[4], s - 3.0);\n}")
+            .replace("#include <common>", "#include <common>\nuniform vec4 uLevels;\nuniform float uTime;\nuniform vec3 uHot[6];\nvarying float vFamily;\nvarying float vWeight;\nvec3 hotMap(float t){\n  t = clamp(t, 0.0, 1.0);\n  float s = t * 5.0;\n  if (s < 1.0) return mix(uHot[0], uHot[1], s);\n  if (s < 2.0) return mix(uHot[1], uHot[2], s - 1.0);\n  if (s < 3.0) return mix(uHot[2], uHot[3], s - 2.0);\n  if (s < 4.0) return mix(uHot[3], uHot[4], s - 3.0);\n  return mix(uHot[4], uHot[5], s - 4.0);\n}")
             .replace(
               "#include <emissivemap_fragment>",
               `#include <emissivemap_fragment>
