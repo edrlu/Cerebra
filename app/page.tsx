@@ -178,9 +178,9 @@ export default function Home() {
   const [genModel, setGenModel] = useState<RegenProvider>(DEFAULT_REGEN_PROVIDER);
   const [genAgent, setGenAgent] = useState<RegenAgent>(DEFAULT_REGEN_AGENT);
   const [timelineMode, setTimelineMode] = useState<"net" | "split">("net");
-  // The three-stage flow: Create (Studio) → Measure (brain response) → Refine
-  // (cut & regenerate). Measure and Refine share the analysis workspace; the
-  // stage gates which tools render (splice + segments) via the conditionals below.
+  // Two-tab flow: Create (Studio) → Refine. Measuring how the brain responds and
+  // cutting/regenerating the weak moments now happen together in Refine, in front
+  // of the living brain — there is no separate "Measure" place anymore.
   const [stage, setStage] = useState<Stage>("create");
   const [spliceMode, setSpliceMode] = useState(false);
   // Each cut marks a region "trimmed" from playback while the full source video

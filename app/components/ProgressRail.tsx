@@ -2,16 +2,16 @@
 
 import { Fragment } from "react";
 
-// The three-stage narrative that replaces the old two-tab nav. The rail is both
-// wayfinding and story: Create an ad → Measure how the brain responds → Refine
-// the weak moments. Steps are always reachable (each stage owns its own empty
-// state), so the rail never dead-ends.
-export type Stage = "create" | "measure" | "refine";
+// Two-tab narrative: Create an ad → Refine it in front of the living brain.
+// "Measure" is no longer a separate place — seeing how the brain responds and
+// cutting/regenerating the weak moments now happen together in Refine. The rail
+// is both wayfinding and story; both steps are always reachable (each stage owns
+// its own empty state), so the rail never dead-ends.
+export type Stage = "create" | "refine";
 
 const STAGES: { id: Stage; label: string; hint: string }[] = [
   { id: "create", label: "Create", hint: "Generate an ad" },
-  { id: "measure", label: "Measure", hint: "See the brain respond" },
-  { id: "refine", label: "Refine", hint: "Cut & regenerate" },
+  { id: "refine", label: "Refine", hint: "Watch the brain respond · cut & regenerate" },
 ];
 
 export function ProgressRail({ stage, onStage }: { stage: Stage; onStage: (s: Stage) => void }) {
