@@ -391,12 +391,15 @@ footer span:first-child { max-width:660px; }
 @media (max-width:700px) {
   body { overflow:auto; }
   .app-shell { height:auto; min-height:100dvh; }
+  /* The hero number already carries engagement on mobile, so the topbar sheds
+     the score + status pills to fit the rail + controls in a narrow bar. */
   .topbar { gap:10px; padding:0 14px; }
+  .topbar-score, .model-pill { display:none; }
   .refine { min-height:calc(100dvh - 56px); }
   .brain-hero { flex:0 0 auto; height:56vh; }
-  .hero-readout { left:18px; top:18px; }
+  .hero-readout { left:18px; top:42px; }
+  .hero-spark { width:200px; }
   .hero-figure strong { font-size:52px; letter-spacing:-2.2px; }
-  .hero-spark { width:180px; }
   .stage-caption { left:18px; bottom:14px; }
   .activity-legend { display:none; }
   .stage-clip { display:none; }
