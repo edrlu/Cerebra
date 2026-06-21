@@ -457,27 +457,21 @@ async def predict(video: UploadFile = File(...)):
 
         try:
             infer_path = _maybe_downscale(destination)
-            # Run the heavy GPU feature extractors (esp. the fp32 V-JEPA2 ViT) under
-            # bf16 autocast: ~2x faster on the A100 with negligible accuracy change.
-            # autocast keeps numerically-sensitive ops (softmax/layernorm/reductions)
-            # in fp32 and weights in fp32; bf16's full fp32 exponent range avoids
-            # overflow (no loss-scaling). No-op on CPU. get_events_dataframe() IS the
-            # "Encoding video N/N" loop (V-JEPA2/Wav2Vec/Llama encoders), so it must
-            # be INSIDE the autocast block to benefit -- that's where the time goes.
-            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=torch.cuda.is_available()):
-                t0 = time.perf_counter()
-                events = model.get_events_dataframe(video_path=str(infer_path))
-                t1 = time.perf_counter()
-            # The downstream TRIBE head is cheap, so run it in fp32 (NOT autocast):
-            # under bf16 autocast its output tensor is bf16, and tribev2's predict()
-            # does y_pred.cpu().numpy() -- NumPy has no bfloat16 dtype, so that throws
-            # "Got unsupported ScalarType BFloat16". fp32 here costs ~nothing and is
-            # correct.
+            # No bf16 autocast at this level. The heavy V-JEPA2 "Encoding video" loop
+            # runs INSIDE model.predict (its DataLoader drives the feature extractors),
+            # NOT inside get_events_dataframe (which is ASR + event assembly). And
+            # wrapping model.predict wholesale in bf16 makes the TRIBE head's output
+            # bf16, which tribev2 then .cpu().numpy()s -> "Got unsupported ScalarType
+            # BFloat16". So bf16 is applied surgically to just the V-JEPA2 forward in
+            # vjepa_fastpath (the actual bottleneck), leaving the head fp32 here.
+            t0 = time.perf_counter()
+            events = model.get_events_dataframe(video_path=str(infer_path))
+            t1 = time.perf_counter()
             predictions, _ = model.predict(events, verbose=False)
             t2 = time.perf_counter()
-            # Split the wall-clock so we can see where time goes: the encode stage
-            # (decode + V-JEPA2/audio/text forwards) vs the downstream TRIBE head.
-            print(f"[timing] encode={t1 - t0:.1f}s predict={t2 - t1:.1f}s")
+            # get_events = ASR/event assembly; predict = TRIBE head AND the V-JEPA2
+            # video encode (watch the "Encoding video N/N" tqdm bar for the latter).
+            print(f"[timing] get_events={t1 - t0:.1f}s predict={t2 - t1:.1f}s")
             result = build_response(predictions)
         except Exception as exc:
             # FastAPI won't log a traceback for the HTTPException below, so print

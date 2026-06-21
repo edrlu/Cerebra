@@ -103,7 +103,16 @@ def _predict_hidden_states_batch(model, batch_datas):
             # Non-tensor processor outputs are clip-invariant for vjepa2; keep one.
             merged[key] = vals[0]
 
-    with torch.inference_mode():
+    # bf16 autocast on the heavy V-JEPA2 forward -- the actual bottleneck. ~2x on
+    # the A100 with negligible accuracy change. The encoder's hidden states come
+    # out fp32 (final layernorm), so the downstream aggregation is unaffected. We
+    # autocast HERE, not around model.predict, because the video encode runs inside
+    # model.predict's DataLoader -- but wrapping the WHOLE predict also makes the
+    # TRIBE head's output bf16, and NumPy can't convert bf16 ("Got unsupported
+    # ScalarType BFloat16"). Scoping it to this forward keeps the head fp32.
+    with torch.inference_mode(), torch.autocast(
+        "cuda", dtype=torch.bfloat16, enabled=torch.cuda.is_available()
+    ):
         pred = model.model(**merged)
     # predict_hidden_states (non-xclip branch): stack every hidden state on a new
     # axis 1 -> (B, L, tokens, dim). Equivalent to the stock batch-1 path up to fp
@@ -181,7 +190,9 @@ def _patched_get_data(self, events):
             # Per-item aggregation: VERBATIM from video.py:305-312.
             for bi, k in enumerate(idxs):
                 t_embd = out[bi]  # (L, tokens, dim) -- aggregate_tokens wants non-batched
-                embd = self.image._aggregate_tokens(t_embd).cpu().numpy()
+                # .float() guards against bf16 (autocast on the forward) reaching
+                # NumPy, which has no bfloat16 dtype.
+                embd = self.image._aggregate_tokens(t_embd).float().cpu().numpy()
                 if (
                     not self.image.cache_all_layers
                     and self.image.cache_n_layers is None
