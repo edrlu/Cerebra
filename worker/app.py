@@ -7,6 +7,7 @@ surface tensor to a browser. The model still runs its full cortical prediction.
 import hashlib
 import json
 import os
+import re
 import subprocess
 import tempfile
 import threading
@@ -576,3 +577,67 @@ async def predict(video: UploadFile = File(...)):
         except Exception as exc:
             print(f"[cache] failed to save {cache_file.name}: {exc}")
         return result
+
+
+def _load_reference(reference_id: str) -> tuple[np.ndarray, np.ndarray] | None:
+    """Load the persisted per-vertex baseline for an already-scored video."""
+    safe = "".join(c for c in reference_id if c in "0123456789abcdefABCDEF")
+    ref_file = PREDICTIONS_DIR / f"{safe}.ref.npz"
+    if not ref_file.exists():
+        return None
+    data = np.load(ref_file)
+    return data["mu"], data["sd"]
+
+
+def _score_against_reference(video_path: Path, ref: tuple[np.ndarray, np.ndarray]) -> dict:
+    """Run TRIBE on one clip and score it against the given reference baseline."""
+    infer_path = _maybe_downscale(video_path)
+    events = model.get_events_dataframe(video_path=str(infer_path))
+    predictions, _ = model.predict(events, verbose=False)
+    return build_response(predictions, ref=ref)
+
+
+@app.post("/score_takes")
+async def score_takes(referenceId: str = Form(...), takes: list[UploadFile] = File(...)):
+    """Score regenerated takes against an already-scored ORIGINAL video.
+
+    The original is NOT re-encoded: we reuse the per-vertex baseline saved by
+    /predict (keyed by `referenceId` = the original's sha256). Each take is
+    z-scored against that baseline, so the takes are directly comparable to one
+    another and to the original. Returns one headline (mean of the 4 families)
+    and the per-frame series per take, plus the best take index."""
+    if model is None:
+        raise HTTPException(status_code=503, detail="Model is still loading.")
+    ref = _load_reference(referenceId)
+    if ref is None:
+        raise HTTPException(status_code=409, detail="Unknown referenceId — score the original first.")
+    if not takes:
+        raise HTTPException(status_code=400, detail="No takes supplied.")
+
+    out: list[dict] = []
+    with tempfile.TemporaryDirectory(prefix="score-takes-") as tmp:
+        for upload_index, up in enumerate(takes):
+            match = re.search(r"take_(\d+)", up.filename or "")
+            take_index = int(match.group(1)) - 1 if match else upload_index
+            suffix = Path(up.filename or "take.mp4").suffix.lower() or ".mp4"
+            dest = Path(tmp) / f"take_{upload_index}{suffix}"
+            with dest.open("wb") as fh:
+                while chunk := await up.read(1024 * 1024):
+                    fh.write(chunk)
+            await up.close()
+            try:
+                resp = _score_against_reference(dest, ref)
+            except Exception as exc:
+                import traceback
+                print("[score_takes] inference FAILED:\n" + traceback.format_exc(), flush=True)
+                raise HTTPException(status_code=500, detail=f"Take scoring failed: {exc}") from exc
+            out.append({
+                "takeIndex": take_index,
+                "score": resp["engagementScore"],
+                "factors": {r["short"]: r["score"] for r in resp["regions"]},
+                "series": {"global": resp["global"], **{r["short"]: r["values"] for r in resp["regions"]}},
+            })
+
+    best = max(range(len(out)), key=lambda i: out[i]["score"])
+    average = round(sum(t["score"] for t in out) / len(out), 1)
+    return {"best": out[best]["takeIndex"], "average": average, "takes": out}
