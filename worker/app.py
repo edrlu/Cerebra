@@ -10,6 +10,7 @@ import os
 import subprocess
 import tempfile
 import threading
+import time
 from contextlib import asynccontextmanager
 from functools import lru_cache
 from pathlib import Path
@@ -447,14 +448,24 @@ async def predict(video: UploadFile = File(...)):
 
         try:
             infer_path = _maybe_downscale(destination)
-            events = model.get_events_dataframe(video_path=str(infer_path))
             # Run the GPU feature extractors (esp. the fp32 V-JEPA2 ViT) + the
-            # transformer under bf16 autocast: ~2-3x faster on the A100 with
+            # transformer under bf16 autocast: ~2x faster on the A100 with
             # negligible accuracy change. autocast keeps numerically-sensitive ops
             # (softmax/layernorm/reductions) in fp32 and weights in fp32; bf16's full
             # fp32 exponent range avoids overflow (no loss-scaling). No-op on CPU.
+            # IMPORTANT: get_events_dataframe() IS the "Encoding video N/N" loop --
+            # it runs the V-JEPA2/Wav2Vec/Llama encoders, so it must be INSIDE the
+            # autocast block to benefit. (It used to sit above the `with`, so the
+            # heavy V-JEPA2 forward silently ran fp32 and bf16 had no effect.)
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=torch.cuda.is_available()):
+                t0 = time.perf_counter()
+                events = model.get_events_dataframe(video_path=str(infer_path))
+                t1 = time.perf_counter()
                 predictions, _ = model.predict(events, verbose=False)
+                t2 = time.perf_counter()
+            # Split the wall-clock so we can see where time goes: the encode stage
+            # (decode + V-JEPA2/audio/text forwards) vs the downstream TRIBE head.
+            print(f"[timing] encode={t1 - t0:.1f}s predict={t2 - t1:.1f}s")
             result = build_response(predictions)
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"TRIBE v2 inference failed: {exc}") from exc
