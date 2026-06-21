@@ -1,6 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Pin the workspace root so Turbopack doesn't infer it from a stray parent
+  // lockfile (silences the "inferred workspace root" warning on startup).
+  turbopack: { root: __dirname },
   // Lets run.sh safely launch another local instance when the default address
   // is already in use. Normal `npm run dev` behavior remains unchanged.
   ...(process.env.NEXT_DIST_DIR ? { distDir: process.env.NEXT_DIST_DIR } : {}),
