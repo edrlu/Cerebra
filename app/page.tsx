@@ -716,8 +716,8 @@ export default function Home() {
     const slot = `${formatTime(start)}–${formatTime(end)}`;
     setVariantPicker(null);
     try {
-      if (series) spliceTakeIntoAnalysis(series, start, end);
       await replacePreviewWithRegeneratedVideo(v.downloadUrl, { start, end }, key);
+      if (series) spliceTakeIntoAnalysis(series, start, end);
       logUpsert(`regen_${key}_t${i}`, { title: `Regenerate ${slot} · take ${i + 1}`, detail: "Applied in place · graph updated · ready to play", status: "done", href: v.downloadUrl });
     } catch (error) {
       logUpsert(`regen_${key}_t${i}`, { title: `Regenerate ${slot} · take ${i + 1}`, detail: error instanceof Error ? error.message : "Couldn't load the regenerated video", status: "error" });
@@ -749,7 +749,11 @@ export default function Home() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ runId, referenceId }),
       });
-      if (!res.ok) throw new Error("scoring request failed");
+      if (!res.ok) {
+        const detail = await res.json().then((d) => d?.error).catch(() => null);
+        logUpsert(`regen_${key}_score`, { title: "Take scoring", detail: detail || "Scoring failed — showing takes without scores.", status: "note" });
+        throw new Error(detail || "scoring request failed");
+      }
       const data: { best: number; average: number; takes: { takeIndex: number; score: number; factors: Factors; series: TakeSeries }[] } = await res.json();
       setRegenJobs((prev) => {
         const cur = prev[key];
