@@ -1,7 +1,7 @@
 {
   "id": "job_1782053100105_xikzqf",
-  "status": "generating",
-  "stage": "agent",
+  "status": "done",
+  "stage": "complete",
   "startSec": 0,
   "endSec": 5,
   "durationSec": 5,
@@ -14,5 +14,5 @@
   "takeIndex": 0,
   "label": "0:00–0:05 · take 1",
   "createdAt": "2026-06-21T14:45:01.531Z",
-  "updatedAt": "2026-06-21T14:45:03.933Z"
+  "updatedAt": "2026-06-21T15:03:29.774Z"
 }

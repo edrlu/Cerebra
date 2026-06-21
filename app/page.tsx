@@ -435,6 +435,18 @@ export default function Home() {
       logUpsert(`source_${Date.now()}`, { title: "Video source", detail: message, status: "error" });
     });
   }
+
+  // A render from Create becomes the active source in Refine automatically, so
+  // generated clips follow the exact same prediction and editing path as uploads.
+  async function openGeneratedVideo(videoUrl: string) {
+    const response = await fetch(videoUrl, { cache: "no-store" });
+    if (!response.ok) throw new Error("Couldn't load the generated video for refining.");
+    const blob = await response.blob();
+    if (!blob.size) throw new Error("The generated video was empty.");
+    acceptFile(new File([blob], "percept-generated.mp4", { type: blob.type.startsWith("video/") ? blob.type : "video/mp4" }));
+    setStage("refine");
+  }
+
   function onDrop(event: DragEvent<HTMLDivElement>) { event.preventDefault(); setDragging(false); acceptFile(event.dataTransfer.files[0]); }
   function onFileChange(event: ChangeEvent<HTMLInputElement>) { acceptFile(event.target.files?.[0]); }
   function scrubTo(nt: number) {
@@ -957,10 +969,6 @@ export default function Home() {
       <ProgressRail stage={stage} onStage={(s) => { if (s !== "refine") { setSpliceMode(false); setDraftCut(null); } setStage(s); }} />
       <div className="topbar-right">
         <div className="model-pill"><span className="live-dot"/>{status}</div>
-        {stage === "create" && <div className="topbar-score">
-        <div><span className="score-label">Engagement</span><span className="score-foot">Four-system average</span></div>
-        <strong>{score}<small>/100</small></strong>
-        </div>}
         <div className="appearance-control">
           <button className={`icon-button ${showAppearance ? "active" : ""}`} onClick={() => setShowAppearance(!showAppearance)} aria-label="Color scheme settings" aria-expanded={showAppearance} aria-haspopup="dialog"><Icon name="settings" size={17}/></button>
           {showAppearance && <div className="appearance-menu" role="dialog" aria-label="Settings">
@@ -980,7 +988,7 @@ export default function Home() {
       </div>
     </header>
 
-    {stage === "create" ? <Studio/> : <section className={`refine ${videoUrl ? "has-clip" : "empty"}`}>
+    {stage === "create" ? <Studio onGenerated={openGeneratedVideo}/> : <section className={`refine ${videoUrl ? "has-clip" : "empty"}`}>
       {/* ── The brain hero: a near-full-bleed cinematic stage, the brain the dominant element ── */}
       <div className={`brain-hero ${dragging ? "dropping" : ""}`} onDragOver={(e) => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={onDrop}>
         <CorticalBrain familyLevels={levels} intensity={currentIntensity} dominantColor={dominant.color}/>
