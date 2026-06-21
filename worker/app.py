@@ -477,6 +477,11 @@ async def predict(video: UploadFile = File(...)):
             print(f"[timing] encode={t1 - t0:.1f}s predict={t2 - t1:.1f}s")
             result = build_response(predictions)
         except Exception as exc:
+            # FastAPI won't log a traceback for the HTTPException below, so print
+            # the real one to the worker log for diagnosis.
+            import traceback
+
+            print("[predict] inference FAILED:\n" + traceback.format_exc(), flush=True)
             raise HTTPException(status_code=500, detail=f"TRIBE v2 inference failed: {exc}") from exc
 
         result["cached"] = False
