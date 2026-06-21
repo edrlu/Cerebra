@@ -58,3 +58,7 @@ yarn-error.log*
 /skills-lock.json
 __pycache__/
 next-env.d.ts
+
+# Cerebra Pika OAuth credentials (local, never commit)
+pipeline/.pika_creds.json
+pipeline/.venv/
