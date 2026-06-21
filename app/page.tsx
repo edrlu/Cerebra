@@ -38,6 +38,9 @@ type RegenVariant = { jobId?: string; status: RegenStatus; clipUrl?: string; dow
 type RegenJobState = { variants: RegenVariant[] };
 type Cut = { start: number; end: number; frameId?: string; preparing?: boolean; frameRequested?: boolean; frameError?: string };
 const VARIANT_COUNT = 3;
+// Leave the final video tail alone. Container duration metadata can include a
+// fraction of a second after the last frame FFmpeg is able to extract.
+const FRAME_TAIL_SAFETY_SECONDS = 0.25;
 const IN_FLIGHT_STATUSES: RegenStatus[] = ["extracting", "awaiting_generation", "generating", "merging"];
 const isInFlight = (s?: RegenStatus) => !!s && IN_FLIGHT_STATUSES.includes(s);
 const REGEN_LABEL: Record<RegenStatus, string> = {
@@ -422,13 +425,20 @@ export default function Home() {
 
   // Cuts snap to a fixed 5s or 10s slot, so the generated clip (produced at the
   // slot's exact length) drops back in without changing total length.
+  function spliceEndLimit() {
+    if (videoDuration > FRAME_TAIL_SAFETY_SECONDS) {
+      return analysis.duration * ((videoDuration - FRAME_TAIL_SAFETY_SECONDS) / videoDuration);
+    }
+    return Math.max(0, analysis.duration - FRAME_TAIL_SAFETY_SECONDS);
+  }
   function snapWindow(a: number, b: number) {
     const lo = Math.min(a, b), hi = Math.max(a, b);
     const rawLen = hi - lo;
-    const opts = [5, 10].filter((s) => s <= analysis.duration + 1e-6);
-    const target = opts.length ? opts.reduce((best, s) => (Math.abs(s - rawLen) < Math.abs(best - rawLen) ? s : best), opts[0]) : analysis.duration;
+    const limit = spliceEndLimit();
+    const opts = [5, 10].filter((s) => s <= limit + 1e-6);
+    const target = opts.length ? opts.reduce((best, s) => (Math.abs(s - rawLen) < Math.abs(best - rawLen) ? s : best), opts[0]) : limit;
     let start = lo, end = lo + target;
-    if (end > analysis.duration) { end = analysis.duration; start = Math.max(0, end - target); }
+    if (end > limit) { end = limit; start = Math.max(0, end - target); }
     return { start, end };
   }
 
@@ -545,7 +555,7 @@ export default function Home() {
     event.stopPropagation();
     if (Math.abs(event.clientX - m.pointerX) > 3) m.moved = true;
     const deltaSec = ((event.clientX - m.pointerX) / m.width) * analysis.duration;
-    const start = Math.max(0, Math.min(analysis.duration - m.len, m.origStart + deltaSec));
+    const start = Math.max(0, Math.min(spliceEndLimit() - m.len, m.origStart + deltaSec));
     const end = start + m.len;
     // Block sliding into another cut — stop at the neighbour's edge instead.
     if (cuts.some((c, i) => i !== m.index && start < c.end - 1e-3 && end > c.start + 1e-3)) return;

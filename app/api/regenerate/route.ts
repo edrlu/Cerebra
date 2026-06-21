@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { copyFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { appendJobLog, dataDir, extractFrame, extractSegment, fileExists, jobDir, probe, readJob, readJobLogTail, sourceDir, writeJob, type RegenJob } from "@/app/lib/regen";
+import { appendJobLog, dataDir, extractFramePair, extractSegment, fileExists, FRAME_TAIL_SAFETY_SECONDS, jobDir, probe, readJob, readJobLogTail, sourceDir, writeJob, type RegenJob } from "@/app/lib/regen";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -62,8 +62,13 @@ export async function POST(request: Request) {
     const dir = path.join(sourceDir(sourceId), "frames");
     try {
       const meta = await probe(source);
-      await extractFrame(source, Math.max(0, startSec), path.join(dir, `${id}_start.png`));
-      await extractFrame(source, Math.max(0, Math.min(Math.max(0, meta.duration - 0.05), endSec)), path.join(dir, `${id}_end.png`));
+      const start = Math.max(0, startSec);
+      const lastDecodableTime = Math.max(0, meta.duration - FRAME_TAIL_SAFETY_SECONDS);
+      const end = Math.max(0, Math.min(lastDecodableTime, endSec));
+      if (end <= start) {
+        return NextResponse.json({ error: "This splice reaches beyond the last decodable video frame. Move it left and try again." }, { status: 422 });
+      }
+      await extractFramePair(source, start, end, dir, id);
       rlog(`frames ${id} extracted from ${sourceId} · start=${startSec.toFixed(2)}s end=${endSec.toFixed(2)}s`);
       return NextResponse.json({ frameId: id, startFrame: `/api/regenerate/file?source=${sourceId}&frame=${id}&edge=start`, endFrame: `/api/regenerate/file?source=${sourceId}&frame=${id}&edge=end` });
     } catch (error) {
@@ -106,8 +111,15 @@ export async function POST(request: Request) {
   try {
     const meta = await probe(source);
     const frames = path.join(sourceDir(sourceId), "frames");
-    await copyFile(path.join(frames, `${frameId}_start.png`), path.join(dir, "frame_start.png"));
-    await copyFile(path.join(frames, `${frameId}_end.png`), path.join(dir, "frame_end.png"));
+    const startFrame = path.join(frames, `${frameId}_start.png`);
+    const endFrame = path.join(frames, `${frameId}_end.png`);
+    if (!(await fileExists(startFrame)) || !(await fileExists(endFrame))) {
+      throw new Error("Splice boundaries are incomplete. Reposition or redraw the splice so Cerebra can prepare a new start/end frame pair.");
+    }
+    await Promise.all([
+      copyFile(startFrame, path.join(dir, "frame_start.png")),
+      copyFile(endFrame, path.join(dir, "frame_end.png")),
+    ]);
 
     // Archive the floor clip (the original segment this run will splice out) once
     // per run. Every take shares the runId, so guard on the file existing and use

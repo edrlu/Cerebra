@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { access, appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { access, appendFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 /**
@@ -15,6 +15,9 @@ export const SOURCE_ROOT = path.join(REGEN_ROOT, "sources");
 // floor clip (the original segment being spliced out) plus each generated take.
 // The merged final.mp4 deliberately never lands here — only the 4 source clips.
 export const DATA_ROOT = path.join(process.cwd(), "data");
+// Containers frequently report a duration that extends beyond their final
+// decodable video frame. Keep splice endpoints out of that unreliable tail.
+export const FRAME_TAIL_SAFETY_SECONDS = 0.25;
 
 export type RegenStatus = "awaiting_generation" | "generating" | "merging" | "done" | "error";
 
@@ -179,6 +182,37 @@ export async function probe(file: string, opts: { jobId?: string; label?: string
 /** Extract a single frame at `sec` to a PNG (fast input-side seek). */
 export async function extractFrame(src: string, sec: number, out: string, opts: { jobId?: string; label?: string } = {}): Promise<void> {
   await run("ffmpeg", ["-y", "-ss", `${sec}`, "-i", src, "-frames:v", "1", "-q:v", "2", out], { ...opts, label: opts.label ?? `extract-frame@${sec.toFixed(3)}s` });
+}
+
+/**
+ * Build and publish a splice's two boundary images as one transaction. The
+ * caller receives the frame id only after both n_1 (start) and n_x (end) are
+ * present. A failed/cancelled extraction stays in the private staging folder
+ * and can never be mistaken for a usable splice by a regeneration job.
+ */
+export async function extractFramePair(src: string, startSec: number, endSec: number, framesDir: string, frameId: string): Promise<void> {
+  const staging = path.join(framesDir, `.${frameId}.pending`);
+  const stagedStart = path.join(staging, "start.png");
+  const stagedEnd = path.join(staging, "end.png");
+  const finalStart = path.join(framesDir, `${frameId}_start.png`);
+  const finalEnd = path.join(framesDir, `${frameId}_end.png`);
+  await rm(staging, { recursive: true, force: true });
+  await mkdir(staging, { recursive: true });
+  try {
+    await extractFrame(src, startSec, stagedStart, { label: `extract-boundary-start@${startSec.toFixed(3)}s` });
+    await extractFrame(src, endSec, stagedEnd, { label: `extract-boundary-end@${endSec.toFixed(3)}s` });
+    if (!(await fileExists(stagedStart)) || !(await fileExists(stagedEnd))) {
+      throw new Error("Frame extraction did not produce both splice boundaries");
+    }
+    // Both candidates now exist. Publish the retained n_1 and n_x boundaries
+    // only at this point; the UI never sees a half-complete frame id.
+    await rename(stagedStart, finalStart);
+    await rename(stagedEnd, finalEnd);
+  } catch (error) {
+    await rm(staging, { recursive: true, force: true });
+    throw error;
+  }
+  await rm(staging, { recursive: true, force: true });
 }
 
 /**
