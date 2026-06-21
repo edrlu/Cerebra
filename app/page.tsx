@@ -31,13 +31,13 @@ const FILMSTRIP_FRAME_COUNT = 24;
 type LogStatus = "active" | "done" | "error" | "note";
 type LogEntry = { id: string; ts: number; title: string; detail?: string; status: LogStatus; bar?: boolean; href?: string; linkLabel?: string };
 type RegenStatus = "extracting" | "awaiting_generation" | "generating" | "merging" | "done" | "error";
-type RegenJobState = { status: RegenStatus; jobId?: string; startFrame?: string; endFrame?: string; downloadUrl?: string; logUrl?: string; logTail?: string; error?: string };
+type RegenJobState = { status: RegenStatus; jobId?: string; startFrame?: string; endFrame?: string; downloadUrl?: string; logUrl?: string; logTail?: string; error?: string; startedAt?: number };
 type Cut = { start: number; end: number; frameId?: string; preparing?: boolean; frameRequested?: boolean; frameError?: string };
 const REGEN_LABEL: Record<RegenStatus, string> = {
   extracting: "Extracting frames…",
-  awaiting_generation: "Generating via MCP agent + Pika…",
-  generating: "Agent is generating clip…",
-  merging: "Merging clip…",
+  awaiting_generation: "Queued · starting agent…",
+  generating: "Waiting on Pika…",
+  merging: "Pika returned · merging clip…",
   done: "Regenerated",
   error: "Failed",
 };
@@ -188,6 +188,17 @@ export default function Home() {
   const [draftCut, setDraftCut] = useState<{ start: number; end: number } | null>(null);
   const [videoDuration, setVideoDuration] = useState(0);
   const [regenJobs, setRegenJobs] = useState<Record<string, RegenJobState>>({});
+  // Ticks once a second while any regen job is in flight so the segment card's
+  // elapsed timer advances live — visible proof we're actively waiting on Pika,
+  // not frozen.
+  const [regenNow, setRegenNow] = useState(0);
+  useEffect(() => {
+    const anyActive = Object.values(regenJobs).some((v) => v.startedAt && (v.status === "extracting" || v.status === "awaiting_generation" || v.status === "generating" || v.status === "merging"));
+    if (!anyActive) return;
+    setRegenNow(Date.now());
+    const id = setInterval(() => setRegenNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [regenJobs]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const logEndRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ start: number; current: number } | null>(null);
@@ -529,10 +540,10 @@ export default function Home() {
       const response = await fetch("/api/regenerate", { method: "POST", body });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Generation setup failed");
-      setRegenJobs((j) => ({ ...j, [key]: { status: "awaiting_generation", jobId: data.jobId, startFrame: data.startFrame, endFrame: data.endFrame, logUrl: data.jobId ? `/api/regenerate/file?job=${data.jobId}&name=job.log` : undefined } }));
+      setRegenJobs((j) => ({ ...j, [key]: { status: "awaiting_generation", startedAt: Date.now(), jobId: data.jobId, startFrame: data.startFrame, endFrame: data.endFrame, logUrl: data.jobId ? `/api/regenerate/file?job=${data.jobId}&name=job.log` : undefined } }));
       const modelName = REGEN_PROVIDERS.find((p) => p.id === genModel)?.name ?? genModel;
       const agentName = genAgent === "claude" ? "Claude" : "Codex";
-      logUpsert(logId, { title: `Regenerate ${slot}`, detail: `Frames ready · generating ${durationSec}s clip via ${agentName} + Pika (${modelName})`, status: "active", bar: true });
+      logUpsert(logId, { title: `Regenerate ${slot}`, detail: `Frames ready · queued for the ${agentName} agent → Pika (${modelName}). If it sticks here, the agent/worker isn't running.`, status: "active", bar: true });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed";
       setRegenJobs((j) => ({ ...j, [key]: { status: "error", error: message } }));
@@ -546,6 +557,15 @@ export default function Home() {
     if (!active.length) return;
     const id = setInterval(async () => {
       for (const [key, v] of active) {
+        // No silent waiting: if a queued job is never claimed by the worker,
+        // error out instead of spinning forever (covers a dead/missing regen
+        // worker even when the agent CLI is installed).
+        if (v.status === "awaiting_generation" && v.startedAt && Date.now() - v.startedAt > 45000) {
+          const slot = key.split("-").map((s) => formatTime(Number(s))).join("–");
+          setRegenJobs((prev) => ({ ...prev, [key]: { ...prev[key], status: "error", error: "The regen worker didn't pick this up within 45s. Is it running? (needs a claude/codex CLI on the server, then restart run.sh)" } }));
+          logUpsert(`regen_${key}`, { title: `Regenerate ${slot}`, detail: "Worker never claimed the job — is the regen worker running?", status: "error" });
+          continue;
+        }
         try {
           const response = await fetch(`/api/regenerate?job=${v.jobId}`, { cache: "no-store" });
           if (!response.ok) continue;
@@ -668,10 +688,11 @@ export default function Home() {
                 {job?.status === "done"
                   ? <a className="segment-download" href={job.downloadUrl} download>Download <Icon name="upload" size={11}/></a>
                   : busy
-                    ? <span className="segment-status"><i className="regen-dot"/>{seg.preparing ? "Preparing frames…" : REGEN_LABEL[job!.status]}</span>
+                    ? <span className="segment-status"><i className="regen-dot"/>{seg.preparing ? "Preparing frames…" : `${REGEN_LABEL[job!.status]}${job?.startedAt ? ` · ${formatTime(Math.floor(((regenNow || Date.now()) - job.startedAt) / 1000))}` : ""}`}</span>
                     : <button className="segment-regen" onClick={() => regenerate(seg)} disabled={!seg.frameId} title={job?.status === "error" ? job.error : seg.frameError || (seg.frameId ? "Regenerate this slot with AI" : "Frames are being prepared with this splice")}>{job?.status === "error" ? "Retry" : "Regenerate"} <Icon name="reset" size={11}/></button>}
                 <button className="segment-remove" onClick={() => removeCut(cuts.indexOf(seg))} aria-label="Remove segment"><Icon name="close" size={13}/></button>
               </div>
+              {busy && job?.logTail ? <small style={{ display: "block", marginTop: 6, fontSize: 11, lineHeight: 1.4, opacity: 0.6, fontFamily: "var(--font-mono, ui-monospace, monospace)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={job.logTail}>{job.logTail.trim().split("\n").filter(Boolean).slice(-1)[0]?.slice(0, 140)}</small> : null}
             </div>; })}</div>}
         </div>}
       </aside>
