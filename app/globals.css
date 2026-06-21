@@ -320,9 +320,13 @@ footer span:first-child { max-width:660px; }
 .sample-frame-2 { background:linear-gradient(135deg,var(--stage),var(--live-bg)); }
 .sample-frame-3 { background:linear-gradient(135deg,var(--orange-soft),var(--stage)); }
 
-.deck-segments { flex:0 0 auto; display:flex; flex-direction:column; min-height:0; border-top:1px solid var(--line); background:var(--surface); }
-.deck-seg-head { flex:0 0 auto; display:flex; align-items:center; gap:8px; padding:10px 13px; border-bottom:1px solid var(--line); }
-.deck-seg-empty { margin:0; padding:13px; color:var(--muted); font-size:11px; line-height:1.5; }
+/* Regeneration queue, pinned to the bottom of the insight panel (below the
+   Response systems / Activity body, touching the deck transport beneath it). */
+.panel-segments { flex:0 0 auto; display:flex; flex-direction:column; min-height:0; max-height:46%; border-top:1px solid var(--line-strong); background:color-mix(in srgb,var(--app-bg) 40%,var(--surface)); }
+.panel-seg-head { flex:0 0 auto; display:flex; align-items:center; gap:8px; padding:9px 12px; border-bottom:1px solid var(--line); }
+.panel-seg-head .segments-regen-all { margin-left:auto; }
+.panel-segments .segment-list { flex-direction:column; gap:7px; padding:9px; overflow-x:hidden; overflow-y:auto; }
+.panel-segments .segment-card { flex:0 0 auto; width:auto; }
 .segments-count { display:grid; place-items:center; min-width:18px; height:16px; padding:0 5px; border-radius:8px; background:color-mix(in srgb,var(--danger) 18%,transparent); color:var(--danger-text); font:600 9px/1 var(--font-mono); }
 
 
@@ -629,7 +633,6 @@ footer span:first-child { max-width:660px; }
 .lift-point-lines path { stroke:var(--stage-hot); stroke-width:3.5; filter:drop-shadow(0 0 5px var(--stage-hot-glow)); }
 
 /* ── Segments: regenerate-all + batch-ready state ── */
-.deck-seg-actions { display:flex; align-items:center; gap:8px; }
 .segments-regen-all { border:1px solid var(--line-strong); background:var(--control-bg); color:var(--ink); padding:4px 9px; border-radius:7px; font:500 9px var(--font-mono); letter-spacing:.2px; }
 .segments-regen-all:hover { background:var(--control-hover); }
 .segment-regen.ready { border-color:var(--live-line); background:var(--live-bg); color:var(--live-text); }
