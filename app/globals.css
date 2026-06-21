@@ -275,9 +275,12 @@ footer span:first-child { max-width:660px; }
 .deck-graph .timeline-graph { height:100%; }
 /* Slim deck: a larger video feed pinned to the bottom-left corner, the same
    height as the ribbon, with the ribbon filling the rest of the row. */
-.deck-graph-row { display:flex; align-items:stretch; }
+.deck-graph-row { display:flex; align-items:flex-end; }
 .deck-graph-row .deck-graph { flex:1 1 auto; min-width:0; }
-.deck-preview.slim { flex:0 0 auto; width:auto; aspect-ratio:16/9; }
+/* Fixed width + height (height matches the ribbon) so neither the video's
+   intrinsic size nor flex sizing can stretch the row. No aspect-ratio — in a
+   flex row it would recompute height from the resolved width and win. */
+.deck-preview.slim { flex:0 0 164px; align-self:auto; width:164px; height:92px; }
 
 /* timeline graph primitives (shared by net + split ribbons) */
 .timeline-graph { position:relative; }
