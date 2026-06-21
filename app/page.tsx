@@ -799,16 +799,35 @@ export default function Home() {
     }
     if (!active.length) return;
     const id = setInterval(async () => {
+      // The worker caps concurrent generations (the Pika account services ~2 at
+      // once), so takes beyond the cap wait in line — a queued take is normal,
+      // not a failure. "Worker alive" = some take anywhere has been claimed
+      // (reached generating/merging/done); used to tell a legitimately-queued
+      // take apart from a dead/missing worker.
+      const workerAlive = Object.values(regenJobs).some((st) =>
+        st.variants.some((sv) => sv.status === "generating" || sv.status === "merging" || sv.status === "done"));
       for (const { key, i, v } of active) {
         const slot = key.split("-").map((s) => formatTime(Number(s))).join("–");
         const takeLog = `regen_${key}_t${i}`;
         const takeTitle = `Regenerate ${slot} · take ${i + 1}`;
-        // No silent waiting: a queued job never claimed by the worker errors out
-        // instead of spinning forever (covers a dead/missing regen worker).
-        if (v.status === "awaiting_generation" && v.startedAt && Date.now() - v.startedAt > 60000) {
-          updateVariant(key, i, { status: "error", error: "The regen worker didn't pick this up within 60s — is it running? (needs a claude/codex CLI on the server)" });
-          logUpsert(takeLog, { title: takeTitle, detail: "Never claimed — is the regen worker running?", status: "error" });
-          continue;
+        // No silent waiting, but no false alarms either. Only the dead/missing
+        // worker case errors fast: if nothing anywhere has been claimed within
+        // 60s the worker isn't running. If a sibling is already generating, the
+        // worker is alive and this take is just queued behind the concurrency
+        // cap — keep waiting, with a generous ceiling as the backstop for a
+        // genuinely stuck queue.
+        if (v.status === "awaiting_generation" && v.startedAt) {
+          const waited = Date.now() - v.startedAt;
+          if (waited > 60000 && !workerAlive) {
+            updateVariant(key, i, { status: "error", error: "The regen worker didn't pick this up within 60s — is it running? (needs a claude/codex CLI on the server)" });
+            logUpsert(takeLog, { title: takeTitle, detail: "Never claimed — is the regen worker running?", status: "error" });
+            continue;
+          }
+          if (waited > 20 * 60000) {
+            updateVariant(key, i, { status: "error", error: "Still queued after 20 minutes — the regen worker may be stuck or the Pika queue is backed up." });
+            logUpsert(takeLog, { title: takeTitle, detail: "Still queued after 20m — worker may be stuck", status: "error" });
+            continue;
+          }
         }
         try {
           const response = await fetch(`/api/regenerate?job=${v.jobId}`, { cache: "no-store" });

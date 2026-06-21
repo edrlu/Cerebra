@@ -18,7 +18,7 @@
  * agent process crashes.
  */
 import { spawn } from "node:child_process";
-import { readdir, readFile, writeFile, appendFile, stat, access, rename } from "node:fs/promises";
+import { readdir, readFile, writeFile, appendFile, stat, access, rename, unlink } from "node:fs/promises";
 import { unlinkSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,13 +27,34 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const REGEN_DIR = process.env.CEREBRA_REGEN_DIR || path.join(ROOT, "regen");
 const APP_URL = (process.env.CEREBRA_URL || `http://localhost:${process.env.PORT || 3000}`).replace(/\/$/, "");
 const POLL_MS = Number(process.env.CEREBRA_REGEN_POLL_MS) || 4000;
-// Up to three clips regenerate at once: the UI queues a batch of cuts together
-// and each spawns its own agent → Pika call, so they run as three concurrent
-// generations rather than serially. Override with CEREBRA_REGEN_CONCURRENCY.
+// The UI queues a batch of (usually 3) cuts together; each spawns its own
+// agent → Pika call, and we try to run all of them AT ONCE for the fastest
+// happy path. The Pika/Kling account only services ~2 generations concurrently,
+// though, so when 3 land together the odd one out sits queued provider-side and
+// can take ~5x longer (~18m vs ~3.5m) — which is why the run used to look like
+// "only 2 ever generate." That straggler is recovered by the per-agent timeout
+// + retry below: it's killed and requeued into a now-free slot, so an
+// over-subscribed batch self-heals instead of stranding a take. Set
+// CEREBRA_REGEN_CONCURRENCY=2 to serialize up front and skip the requeue.
 const MAX_CONCURRENT = Number(process.env.CEREBRA_REGEN_CONCURRENCY) || 3;
 // A claimed job whose agent never reported back is reclaimed after this long so
 // a crashed agent doesn't strand the job permanently.
 const STALE_CLAIM_MS = Number(process.env.CEREBRA_REGEN_STALE_MS) || 12 * 60_000;
+// A single agent that never returns — e.g. its Pika/Kling task is stuck
+// "running" and it polls task_status forever — would otherwise hold its
+// concurrency slot AND its claim indefinitely (the in-flight `running` guard in
+// tick() even blocks the stale-claim recovery), so the run permanently shows
+// N-1 takes. Kill the agent after this long to free the slot; keep it under the
+// stale-claim window so recovery happens here, deterministically. A legit take
+// finishes in ~3.5m; with the batch over-subscribed (more takes than the
+// provider runs at once) the straggler sits queued provider-side for much
+// longer, so 11m kills it to requeue into a now-free slot, and also catches a
+// genuinely hung agent (e.g. a Pika task stuck "running" forever).
+const AGENT_TIMEOUT_MS = Number(process.env.CEREBRA_REGEN_AGENT_TIMEOUT_MS) || 11 * 60_000;
+// How many times a take that produced no clip (timeout / agent failure) is
+// requeued. The straggler that stalled was usually queued behind its siblings;
+// once they finish and free a provider slot, one retry almost always lands it.
+const MAX_RETRIES = process.env.CEREBRA_REGEN_MAX_RETRIES != null ? Number(process.env.CEREBRA_REGEN_MAX_RETRIES) : 1;
 const MODEL = process.env.CEREBRA_REGEN_MODEL || "";
 // Verbose by default; set CEREBRA_REGEN_DEBUG=0 to quiet the per-tick scan noise.
 const DEBUG = process.env.CEREBRA_REGEN_DEBUG !== "0";
@@ -172,8 +193,23 @@ function runAgent(job, dir, dlog) {
 
     dlog(`SPAWN agent=${agent} via "${baseCmd}": ${summary}`);
     const t = Date.now();
-    const child = spawn(cmd, args, { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"], env: process.env });
+    // detached:true puts the agent in its own process group so a timeout kill
+    // (process.kill(-pid)) reaches the WHOLE tree — npx → sh → claude — not just
+    // the launcher. Without it, killing child.pid leaves the real agent (and its
+    // task_status poll loop) alive, so the Pika call keeps burning and the slot
+    // is never truly freed.
+    const child = spawn(cmd, args, { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"], env: process.env, detached: true });
     dlog(`agent pid=${child.pid}`);
+    let timedOut = false;
+    let hardKill = null;
+    const killTimer = setTimeout(() => {
+      timedOut = true;
+      const mins = (AGENT_TIMEOUT_MS / 60000).toFixed(0);
+      dlog(`TIMEOUT after ${mins}m — killing agent (pid=${child.pid}). A take this slow is almost always a Pika/Kling task stuck "running" while the sibling takes held the provider's concurrency slots; freeing this slot and requeuing the job for a clean retry.`);
+      try { process.kill(-child.pid, "SIGTERM"); } catch { try { child.kill("SIGTERM"); } catch { /* already gone */ } }
+      hardKill = setTimeout(() => { try { process.kill(-child.pid, "SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch { /* already gone */ } } }, 10_000);
+    }, AGENT_TIMEOUT_MS);
+    const clearTimers = () => { clearTimeout(killTimer); if (hardKill) clearTimeout(hardKill); };
     let full = "";
     const partial = { stdout: "", stderr: "" };
     const stream = (which) => (d) => {
@@ -189,12 +225,18 @@ function runAgent(job, dir, dlog) {
     };
     child.stdout.on("data", stream("stdout"));
     child.stderr.on("data", stream("stderr"));
-    child.on("error", (err) => { dlog(`SPAWN ERROR (${agent}): ${err.message}`); resolve({ ok: false, reason: `spawn failed: ${err.message}` }); });
+    child.on("error", (err) => { clearTimers(); dlog(`SPAWN ERROR (${agent}): ${err.message}`); resolve({ ok: false, reason: `spawn failed: ${err.message}` }); });
     child.on("exit", (code, signal) => {
+      clearTimers();
       for (const w of ["stdout", "stderr"]) if (partial[w].trim()) dlog(`${w}> ${partial[w].trim()}`);
       const done = /REGEN_DONE/.test(full);
       const failed = full.match(/REGEN_FAILED:[^\n]*/);
       const secs = ((Date.now() - t) / 1000).toFixed(1);
+      if (timedOut) {
+        dlog(`agent EXIT (killed by timeout) code=${code ?? "-"} signal=${signal ?? "-"} after ${secs}s`);
+        resolve({ ok: false, timedOut: true, reason: `agent timed out after ${(AGENT_TIMEOUT_MS / 60000).toFixed(0)}m (Pika task likely stuck "running")` });
+        return;
+      }
       dlog(`agent EXIT code=${code} signal=${signal ?? "-"} after ${secs}s · REGEN_DONE=${done} REGEN_FAILED=${failed ? "yes" : "no"}`);
       resolve({ ok: code === 0 && done, reason: failed ? failed[0] : (full.trim().split("\n").pop() || `exit ${code}`) });
     });
@@ -240,8 +282,20 @@ async function processJob(dir, job) {
       if (result.ok) {
         dlog(`WARN: agent printed REGEN_DONE but status is still ${fresh.status} — /complete likely never landed. Leaving for stale-claim retry.`);
       } else {
-        dlog(`MARKING ERROR: ${result.reason}`);
-        await writeJobStatus(dir, fresh, { status: "error", stage: "agent", error: result.reason || "Generation failed" });
+        const retryCount = Number(fresh.retryCount) || 0;
+        if (retryCount < MAX_RETRIES) {
+          // The take produced no clip (timed out, or the agent failed). Requeue
+          // it: clearing .claimed + resetting to awaiting_generation makes the
+          // next tick re-pick it. By now the sibling takes have usually finished
+          // and freed the provider's concurrency slots, so the retry — which was
+          // the straggler queued behind them — gets its own slot and completes.
+          dlog(`RETRY ${retryCount + 1}/${MAX_RETRIES}: ${result.reason} — requeuing (sibling takes have likely freed a provider slot)`);
+          try { await unlink(lock); } catch { /* lock already gone */ }
+          await writeJobStatus(dir, fresh, { status: "awaiting_generation", stage: "queued", error: undefined, retryCount: retryCount + 1 });
+        } else {
+          dlog(`MARKING ERROR (retries exhausted ${retryCount}/${MAX_RETRIES}): ${result.reason}`);
+          await writeJobStatus(dir, fresh, { status: "error", stage: "agent", error: result.reason || "Generation failed" });
+        }
       }
     }
     const finalStatus = (await readJob(dir))?.status;
@@ -334,7 +388,7 @@ async function acquireLock() {
 async function main() {
   if (!(await acquireLock())) process.exit(0);
   log(`START · watching ${REGEN_DIR} → ${APP_URL}`);
-  log(`config · concurrency=${MAX_CONCURRENT} poll=${POLL_MS}ms staleClaim=${Math.round(STALE_CLAIM_MS / 60000)}m model=${MODEL || "(default)"} debug=${DEBUG}`);
+  log(`config · concurrency=${MAX_CONCURRENT} poll=${POLL_MS}ms staleClaim=${Math.round(STALE_CLAIM_MS / 60000)}m agentTimeout=${Math.round(AGENT_TIMEOUT_MS / 60000)}m maxRetries=${MAX_RETRIES} model=${MODEL || "(default)"} debug=${DEBUG}`);
   log(`per-job traces are written to regen/<id>/agent.log`);
   while (true) {
     await tick();

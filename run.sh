@@ -200,6 +200,11 @@ if [[ -n "$REGEN_AGENTS" ]]; then
   fi
   REGEN_WORKER_LOG="$ROOT_DIR/.regen-worker-${NEXT_PORT}.log"
   info "Starting clip-regeneration worker (agents: ${REGEN_AGENTS} · logs: ${REGEN_WORKER_LOG#$ROOT_DIR/})"
+  # Try every take in a batch at once (fastest happy path). The Pika/Kling
+  # account only runs ~2 generations concurrently, so an over-subscribed 3rd
+  # take queues provider-side and is recovered by the worker's per-agent timeout
+  # + retry (it requeues into a freed slot). Set CEREBRA_REGEN_CONCURRENCY=2 to
+  # serialize instead and avoid the requeue.
   CEREBRA_URL="http://localhost:${NEXT_PORT}" \
   CEREBRA_REGEN_CONCURRENCY="${CEREBRA_REGEN_CONCURRENCY:-3}" \
   node "$ROOT_DIR/worker/regen-worker.mjs" >"$REGEN_WORKER_LOG" 2>&1 &
