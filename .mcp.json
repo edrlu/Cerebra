@@ -3,6 +3,13 @@
     "pika": {
       "type": "http",
       "url": "https://mcp.pika.me/api/mcp"
+    },
+    "terac": {
+      "type": "http",
+      "url": "https://terac.com/api/mcp",
+      "headers": {
+        "x-api-key": "${TERAC_API_KEY}"
+      }
     }
   }
 }

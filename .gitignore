@@ -49,6 +49,9 @@ yarn-error.log*
 # Per-run segment archive: floor clip + generated takes saved per regeneration run
 /data/
 
+# Terac human-rating rounds scratch (round metadata + submitted ratings)
+/rate/
+
 # Local TRIBE v2 runtime
 /.venv/
 /.tribev2-worker*.log

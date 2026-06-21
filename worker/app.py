@@ -100,6 +100,11 @@ ENGAGEMENT_FAMILIES = [
 # clip. (Cross-video comparability needs a fixed reference set -- deferred.)
 ENGAGEMENT_Z_REF = 2.0
 
+# The four families are combined into the overall Ad/Engagement Score with an
+# equal-weighted mean. Human preference signal is collected separately as a
+# one-shot Terac rating on the generated ad (see app/lib/terac.ts), rather than
+# by reweighting these neural families.
+
 
 # fsaverage mesh resolution for the WebGL viewer. fsaverage5 (10,242 vertices
 # per hemisphere) is TRIBE v2's native prediction resolution, so the mesh and
@@ -355,22 +360,23 @@ def build_response(predictions: np.ndarray) -> dict:
 
     regions = []
     cognitive_series = {}
+    fam_means = np.zeros(len(ENGAGEMENT_FAMILIES), dtype=np.float64)
     for i, fam in enumerate(ENGAGEMENT_FAMILIES):
         values = np.round(traces[i], 1).tolist()
         cognitive_series[fam["key"]] = values
+        fam_means[i] = float(traces[i].mean()) if n_frames else 0.0
         regions.append({
             "name": fam["name"],
             "short": fam["short"],
             "color": fam["color"],
             "reliability": fam["reliability"],
-            "score": round(float(traces[i].mean()), 1) if n_frames else 0.0,
+            "score": round(fam_means[i], 1),
             "values": values,
         })
 
-    # Overall engagement = equal-weighted mean of the four families (no
-    # reliability weighting, per design).
+    # Overall engagement = equal-weighted mean of the four neural families.
     global_trace = traces.mean(axis=0)
-    engagement_score = round(float(np.mean([r["score"] for r in regions])), 1)
+    engagement_score = round(float(fam_means.mean()), 1)
     regions.sort(key=lambda r: r["score"], reverse=True)
 
     tr = float(model.data.TR)
