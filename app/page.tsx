@@ -696,7 +696,7 @@ export default function Home() {
           <div className="brain-stage">
             <div className="stage-grid"/>
             <div className="stage-meta"><span>02 / LIVE NEURAL RESPONSE</span><span className="hot-key"><i/> HIGH ACTIVITY</span></div>
-            <CorticalBrain familyLevels={levels} intensity={currentIntensity}/>
+            <CorticalBrain familyLevels={levels} intensity={currentIntensity} dominantColor={dominant.color}/>
             <div className="brain-caption"><span className="pulse-ring"/><span>Now driving</span><b style={{ color: dominant.color }}>{dominant.name}</b></div>
           </div>
           <div className="panel activations-panel"><div className="panel-head"><span>03 / LIVE ENGAGEMENT</span><span className="live-engagement-score" aria-label={`Normalized net engagement ${Math.round(normalizedNet)} out of 100`}><i/>{Math.round(normalizedNet)}</span></div><p className="panel-subtitle">Normalized net response · 0 = clip floor, 100 = clip peak</p><div className="region-list">{analysis.regions.map((region, index) => { const family = families.find((item) => item.short === region.short); return <button className={`region-item ${index === regionIndex ? "selected" : ""}`} onClick={() => setRegionIndex(index)} key={region.short}><span className="region-bullet" style={{ background: region.color }}/><span className="region-name"><b style={{ color: region.color }}>{region.name}</b><small>{family?.anatomy}</small><em>{region.short} · live now {Math.round((analysis.cognitiveSeries?.[family?.key ?? ""]?.[currentIndex]) ?? 0)}</em></span><span className="region-score">{Math.round(region.score)}</span><Icon name="chevron" size={15}/></button>; })}</div></div>
