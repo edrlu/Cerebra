@@ -22,10 +22,11 @@
 # production
 /build
 
-./test/.venv/
+test/.venv/
 # misc
 .DS_Store
 *.pem
+test/cache/
 
 # debug
 npm-debug.log*
