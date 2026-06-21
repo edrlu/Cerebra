@@ -60,6 +60,7 @@ type Health = {
     knowledge_index: string; index_ready: boolean; document_count: number;
   };
 };
+type RateAggregate = { n: number; meanStars: number; score100: number; distribution: number[]; reasons: string[] };
 
 const INDUSTRIES = ["", "beverage", "tech", "beauty", "food", "saas", "fitness", "general"];
 const ASPECTS = ["9:16", "3:4", "1:1", "16:9"];
@@ -125,6 +126,12 @@ export function Studio() {
   const [genStatus, setGenStatus] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [health, setHealth] = useState<Health | null>(null);
+  // One-shot human rating of the generated ad via Terac (see app/lib/terac.ts).
+  const [rateRound, setRateRound] = useState<{ id: string; ratePath: string } | null>(null);
+  const [rateAgg, setRateAgg] = useState<RateAggregate | null>(null);
+  const [rateBusy, setRateBusy] = useState(false);
+  const [rateLaunched, setRateLaunched] = useState(false);
+  const [rateCopied, setRateCopied] = useState(false);
   // RAG pipeline animation state machine.
   const [ragActive, setRagActive] = useState(false);
   const [ragStep, setRagStep] = useState(0);
@@ -247,8 +254,8 @@ export function Studio() {
     }
   }
 
-  async function optimize() {
-    if (!brief.trim()) { setError("Enter a brief first."); return; }
+  async function optimize(briefText: string = brief) {
+    if (!briefText.trim()) { setError("Enter a brief first."); return; }
     setLoading(true); setError(null); setResult(null);
     startRag();
     try {
@@ -256,7 +263,7 @@ export function Studio() {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          brief,
+          brief: briefText,
           product: product || undefined,
           industry: industry || undefined,
           aspect_ratio: aspect,
@@ -285,6 +292,7 @@ export function Studio() {
   async function generate() {
     if (!result) return;
     setGenerating(true); setGenStatus(null); setVideoUrl("");
+    setRateRound(null); setRateAgg(null); setRateLaunched(false);
     try {
       const cr = result.creative;
       const res = await fetch("/api/generate", {
@@ -307,8 +315,97 @@ export function Studio() {
     }
   }
 
+  // Open a Terac rating round for the freshly generated ad, then poll the live
+  // aggregate while raters come in.
+  async function startRating() {
+    if (!videoUrl) return;
+    setRateBusy(true);
+    try {
+      const res = await fetch("/api/rate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "create",
+          videoUrl,
+          brief,
+          product: product || undefined,
+          aspect,
+          durationSec: result?.creative.duration_seconds,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "Could not open a rating round.");
+      setRateRound({ id: data.round.id, ratePath: data.ratePath });
+      setRateAgg({ n: 0, meanStars: 0, score100: 0, distribution: [0, 0, 0, 0, 0], reasons: [] });
+    } catch (e) {
+      setGenStatus(e instanceof Error ? e.message : "Could not open a rating round.");
+    } finally {
+      setRateBusy(false);
+    }
+  }
+
+  // Flag the round for Terac recruitment. The actual paid launch is agent-driven
+  // (an agent with the Terac MCP points an opportunity at /rate?round=<id>) so we
+  // never spend credits unattended — see TERAC.md.
+  async function flagTeracLaunch() {
+    if (!rateRound) return;
+    setRateBusy(true);
+    try {
+      await fetch("/api/rate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "launch", round: rateRound.id, numParticipants: 25, durationMinutes: 5 }),
+      });
+      setRateLaunched(true);
+    } catch {
+      /* non-fatal */
+    } finally {
+      setRateBusy(false);
+    }
+  }
+
+  function copyRateLink() {
+    if (!rateRound) return;
+    const url = `${typeof window !== "undefined" ? window.location.origin : ""}${rateRound.ratePath}`;
+    navigator.clipboard?.writeText(url);
+    setRateCopied(true);
+    setTimeout(() => setRateCopied(false), 1400);
+  }
+
+  // Fold the human verdict back into the brief and re-run the optimizer — the
+  // "best → optimizer rewrite" half of the loop.
+  function refineFromFeedback() {
+    if (!rateAgg || !rateAgg.n) return;
+    const notes = rateAgg.reasons.slice(-6).map((r) => `- ${r}`).join("\n");
+    const next =
+      `${brief}\n\nAUDIENCE FEEDBACK (Terac human panel, n=${rateAgg.n}): rated ${rateAgg.score100}/100 ` +
+      `(${rateAgg.meanStars.toFixed(1)}/5).${notes ? ` Recurring notes:\n${notes}` : ""}\n` +
+      "Rewrite the ad to directly address this feedback while keeping the core concept.";
+    setBrief(next);
+    optimize(next);
+  }
+
+  useEffect(() => {
+    if (!rateRound) return;
+    let alive = true;
+    const tick = async () => {
+      try {
+        const res = await fetch(`/api/rate?round=${encodeURIComponent(rateRound.id)}`, { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (alive && data?.aggregate) setRateAgg(data.aggregate as RateAggregate);
+      } catch {
+        /* keep polling */
+      }
+    };
+    tick();
+    const id = window.setInterval(tick, 4000);
+    return () => { alive = false; clearInterval(id); };
+  }, [rateRound]);
+
   const c = result?.creative;
   const redis = health?.redis;
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
   const ragVisible = ragActive || ragDone || ragErr;
 
   return (
@@ -436,7 +533,7 @@ export function Studio() {
                 <span className={`sw${liveResearch ? " on" : ""}`}><i /></span>
               </button>
 
-              <button className="btn" onClick={optimize} disabled={loading}>
+              <button className="btn" onClick={() => optimize()} disabled={loading}>
                 <Icon name="spark" />{loading ? "Running RAG…" : "Run RAG · optimize prompt"}
               </button>
               {loading && (
@@ -558,9 +655,62 @@ export function Studio() {
                   </div>}
             </div>
             <div className="phone-cap"><span>{aspect} · 1080P · SEEDANCE 2.0</span><span>{c ? `${c.duration_seconds}s` : "10s default"}</span></div>
+
+            {videoUrl && (
+              <div style={RS.box}>
+                <div style={RS.head}>
+                  <span>HUMAN RATING · TERAC</span>
+                  {rateAgg && rateAgg.n > 0 ? <span style={RS.n}>{rateAgg.n} rater{rateAgg.n > 1 ? "s" : ""}</span> : null}
+                </div>
+                {!rateRound ? (
+                  <>
+                    <p style={RS.sub}>Put a real human number on this ad: open a rating round, then recruit raters through Terac.</p>
+                    <button style={RS.btn} onClick={startRating} disabled={rateBusy}>{rateBusy ? "Opening…" : "Collect human ratings"}</button>
+                  </>
+                ) : (
+                  <>
+                    <div style={RS.scoreRow}>
+                      <strong style={RS.score}>{rateAgg?.score100 ?? 0}<small style={RS.scoreUnit}>/100</small></strong>
+                      <span style={RS.scoreMeta}>{rateAgg && rateAgg.n > 0 ? `${rateAgg.meanStars.toFixed(1)}★ average · live` : "waiting for raters…"}</span>
+                    </div>
+                    <div style={RS.linkRow}>
+                      <code style={RS.link}>{`${origin}${rateRound.ratePath}`}</code>
+                      <button style={RS.copy} onClick={copyRateLink}>{rateCopied ? "✓" : "Copy"}</button>
+                    </div>
+                    {rateLaunched ? (
+                      <p style={RS.note}>Flagged for Terac. Launch the round from an agent with the Terac MCP connected — see <code>TERAC.md</code>.</p>
+                    ) : (
+                      <button style={RS.ghost} onClick={flagTeracLaunch} disabled={rateBusy}>Recruit raters on Terac →</button>
+                    )}
+                    {rateAgg && rateAgg.n > 0 ? (
+                      <button style={RS.btn} onClick={refineFromFeedback} disabled={loading}>Refine brief from this feedback</button>
+                    ) : null}
+                  </>
+                )}
+              </div>
+            )}
           </aside>
         </div>
       </div>
     </section>
   );
 }
+
+// Inline styles for the Terac human-rating panel, kept local so it ships without
+// touching the global stylesheet.
+const RS: Record<string, CSSProperties> = {
+  box: { marginTop: 12, padding: 14, borderRadius: 12, border: "1px solid var(--hairline, #232936)", background: "rgba(63,214,192,.05)" },
+  head: { display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11, letterSpacing: ".12em", fontWeight: 700, color: "var(--muted, #9aa3b2)", marginBottom: 8 },
+  n: { color: "#3fd6c0", letterSpacing: 0 },
+  sub: { fontSize: 12.5, color: "var(--muted, #9aa3b2)", lineHeight: 1.5, margin: "0 0 10px" },
+  scoreRow: { display: "flex", alignItems: "baseline", gap: 10, marginBottom: 10 },
+  score: { fontSize: 30, fontWeight: 700, lineHeight: 1, color: "var(--ink, #e9edf5)" },
+  scoreUnit: { fontSize: 13, fontWeight: 600, opacity: 0.55, marginLeft: 2 },
+  scoreMeta: { fontSize: 12, color: "var(--muted, #9aa3b2)" },
+  linkRow: { display: "flex", gap: 6, alignItems: "center", marginBottom: 10 },
+  link: { flex: 1, fontSize: 11, padding: "7px 9px", borderRadius: 8, background: "rgba(0,0,0,.25)", border: "1px solid var(--hairline, #232936)", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" },
+  copy: { fontSize: 11, fontWeight: 700, padding: "7px 11px", borderRadius: 8, border: "1px solid var(--hairline, #232936)", background: "transparent", color: "var(--ink, #e9edf5)", cursor: "pointer" },
+  btn: { width: "100%", marginTop: 6, padding: "10px 12px", borderRadius: 10, border: "none", background: "#3fd6c0", color: "#06231f", fontWeight: 700, fontSize: 13, cursor: "pointer" },
+  ghost: { width: "100%", padding: "9px 12px", borderRadius: 10, border: "1px solid #3fd6c0", background: "transparent", color: "#3fd6c0", fontWeight: 700, fontSize: 13, cursor: "pointer" },
+  note: { fontSize: 11.5, color: "var(--muted, #9aa3b2)", lineHeight: 1.5, margin: "2px 0 0" },
+};

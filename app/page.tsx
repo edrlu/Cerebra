@@ -14,6 +14,10 @@ type Analysis = {
   peak: { time: number; label: string; value: number };
   source: "demo" | "model";
   cognitiveSeries?: Record<string, number[]>;
+  // The worker's overall Ad/Engagement Score: the equal-weighted mean of TRIBE's
+  // four neural families. (Human preference is collected separately via a
+  // one-shot Terac rating on the generated ad — see app/lib/terac.ts.)
+  engagementScore?: number;
 };
 
 // Cortical surface proxy regions, in the worker's family order. These are
@@ -117,6 +121,11 @@ function createDemoForFile(file: File, scheme: ColorSchemeId): Analysis {
 }
 
 function engagementScore(a: Analysis): number {
+  // Prefer the worker's engagement score (equal-weighted mean of TRIBE's four
+  // families). Fall back to the peak mean for demo data, which has no worker score.
+  if (typeof a.engagementScore === "number" && Number.isFinite(a.engagementScore)) {
+    return Math.round(a.engagementScore);
+  }
   const peaks = FAMILY_KEYS.map((k) => Math.max(0, ...(a.cognitiveSeries?.[k] ?? [0])));
   return Math.round(peaks.reduce((s, v) => s + v, 0) / peaks.length);
 }
@@ -789,7 +798,7 @@ export default function Home() {
       <div className="topbar-right">
         <div className="model-pill"><span className="live-dot"/>{status}</div>
         <div className="topbar-score">
-        <div><span className="score-label">ENGAGEMENT SCORE</span><span className="score-foot">Four-system peak</span></div>
+        <div><span className="score-label">ENGAGEMENT SCORE</span><span className="score-foot">Four-system mean</span></div>
         <strong>{score}<small>/100</small></strong>
         </div>
         <div className="appearance-control">
