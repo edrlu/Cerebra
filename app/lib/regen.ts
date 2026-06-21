@@ -35,8 +35,9 @@ export type RegenJob = {
   runId?: string; // batch id shared by every take of one regeneration run → data/<runId>/
   takeIndex?: number; // 0-based position of this take within the run → take_<i+1>.mp4
   label?: string;
-  // Temporary clip-quality label from the local filler scorer. This is kept on
-  // the job so polling clients can display the result as soon as it is ready.
+  // TRIBE engagement headline (mean of the 4 families), referenced to the
+  // original. Set by the client from /api/regenerate/score after the run's
+  // takes finish generating — not by /complete.
   score?: number;
   stage?: string;
   error?: string;
@@ -227,32 +228,6 @@ export async function extractSegment(src: string, startSec: number, endSec: numb
     "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "veryfast", "-crf", "20",
     "-c:a", "aac", "-movflags", "+faststart", out],
     { ...opts, label: opts.label ?? `extract-segment[${start.toFixed(2)},${endSec.toFixed(2)}]` });
-}
-
-/**
- * Save a generated take's audio as an MP3 for downstream scoring. Generated
- * clips are not guaranteed to contain audio, so synthesize a silent track when
- * necessary; every archived take therefore has a stable MP3 model input.
- */
-export async function extractAudioMp3(src: string, out: string, opts: { jobId?: string; label?: string } = {}): Promise<void> {
-  const meta = await probe(src, { ...opts, label: "probe-take-audio" });
-  const duration = Math.max(0.04, meta.duration || 5);
-  const input = meta.hasAudio
-    ? ["-i", src, "-map", "0:a:0"]
-    : ["-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100", "-t", duration.toFixed(3)];
-  await run("ffmpeg", ["-y", ...input, "-vn", "-c:a", "libmp3lame", "-q:a", "4", out], {
-    ...opts,
-    label: opts.label ?? "archive-take-mp3",
-  });
-}
-
-/**
- * Filler quality model contract. It deliberately returns a random whole-number
- * grade until the real video/audio evaluator replaces it.
- */
-export async function scoreArchivedTakeMp3(mp3: string): Promise<number> {
-  await access(mp3); // The scorer always consumes the archived model input.
-  return 50 + Math.floor(Math.random() * 51);
 }
 
 /**
