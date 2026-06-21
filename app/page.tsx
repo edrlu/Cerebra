@@ -286,6 +286,8 @@ export default function Home() {
   // auto-open it only once per batch (reopening after the user closes it is rude).
   const [variantPicker, setVariantPicker] = useState<string | null>(null);
   const autoOpenedRef = useRef<Set<string>>(new Set());
+  // Takes already sent for scoring (`${key}:${i}`) so each is scored exactly once.
+  const scoredTakesRef = useRef<Set<string>>(new Set());
   // Ticks once a second while any regen job is in flight so the segment card's
   // elapsed timer advances live — visible proof we're actively waiting on Pika,
   // not frozen.
@@ -641,6 +643,7 @@ export default function Home() {
     const runId = new Date().toISOString().replace(/[:.]/g, "-");
     // Fresh batch: clear any prior picker auto-open guard and seed N pending variants.
     autoOpenedRef.current.delete(key);
+    scoredTakesRef.current.forEach((tk) => { if (tk.startsWith(`${key}:`)) scoredTakesRef.current.delete(tk); });
     setRegenJobs((j) => ({ ...j, [key]: { variants: Array.from({ length: VARIANT_COUNT }, () => ({ status: "extracting" as RegenStatus })), runId } }));
     // One activity-feed row PER take (regen_<key>_t<i>) so all VARIANT_COUNT
     // show up side by side in ASK CEREBRA, not collapsed into a single line.
@@ -732,40 +735,56 @@ export default function Home() {
   function rejectAll(key: string) {
     setVariantPicker(null);
     autoOpenedRef.current.delete(key);
+    scoredTakesRef.current.forEach((tk) => { if (tk.startsWith(`${key}:`)) scoredTakesRef.current.delete(tk); });
     setRegenJobs((prev) => { const next = { ...prev }; delete next[key]; return next; });
   }
 
-  // Once a batch finishes generating, score all takes against the ORIGINAL in one
-  // run-level pass, then reveal the picker with scores. No clip is shown without
-  // its score. If the original was never scored by the live model (demo fallback,
-  // no referenceId), open the picker unscored rather than blocking.
-  async function scoreBatch(key: string) {
-    const st = regenJobs[key];
-    const runId = st?.runId;
+  // Score a SINGLE take against the original the instant it finishes generating,
+  // so scores stream into the picker take-by-take instead of waiting for all
+  // three. best/average are recomputed client-side as each score lands. The
+  // worker reuses the original's saved per-vertex baseline (recomputed on the GPU
+  // even for a cached original), so a cached original always scores against it.
+  // With no baseline at all the worker scores the take within-video — so the
+  // model ALWAYS runs on each take and a score always comes back. Only requires
+  // the runId; referenceId is optional.
+  async function scoreTake(key: string, i: number) {
+    const runId = regenJobs[key]?.runId;
+    if (!runId) return;
     const referenceId = analysis.referenceId;
-    if (!runId || !referenceId) { setVariantPicker(key); return; }
+    const slot = key.split("-").map((s) => formatTime(Number(s))).join("–");
+    const scoreLog = `score_${key}_t${i}`;
+    // A visible activity-feed task per take: each generated take is run through
+    // TRIBE v2 to compute its engagement the moment it finishes.
+    logUpsert(scoreLog, { title: `Score take ${i + 1} · ${slot}`, detail: "Running the take through TRIBE v2…", status: "active", bar: true });
     setRegenJobs((prev) => (prev[key] ? { ...prev, [key]: { ...prev[key], scoring: true } } : prev));
-    setVariantPicker(key);
     try {
       const res = await fetch("/api/regenerate/score", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ runId, referenceId }),
+        body: JSON.stringify({ runId, referenceId: referenceId || "", takeIndex: i }),
       });
       if (!res.ok) {
         const detail = await res.json().then((d) => d?.error).catch(() => null);
-        logUpsert(`regen_${key}_score`, { title: "Take scoring", detail: detail || "Scoring failed — showing takes without scores.", status: "note" });
+        logUpsert(scoreLog, { title: `Score take ${i + 1} · ${slot}`, detail: detail || "Scoring failed — showing the take without a score.", status: "error" });
         throw new Error(detail || "scoring request failed");
       }
-      const data: { best: number; average: number; takes: { takeIndex: number; score: number; factors: Factors; series: TakeSeries }[] } = await res.json();
+      const data: { takes: { takeIndex: number; score: number; factors: Factors; series: TakeSeries }[] } = await res.json();
+      const t = data.takes?.find((x) => x.takeIndex === i) ?? data.takes?.[0];
+      if (!t) throw new Error("no score returned");
+      logUpsert(scoreLog, { title: `Score take ${i + 1} · ${slot}`, detail: `Engagement ${Math.round(t.score)}/100${referenceId ? " vs original (50 = baseline)" : " (within-clip)"}`, status: "done" });
       setRegenJobs((prev) => {
         const cur = prev[key];
         if (!cur) return prev;
         const variants = cur.variants.slice();
-        for (const t of data.takes) {
-          if (variants[t.takeIndex]) variants[t.takeIndex] = { ...variants[t.takeIndex], score: t.score, factors: t.factors, series: t.series };
-        }
-        return { ...prev, [key]: { ...cur, variants, scoring: false, scored: true, best: data.best, average: data.average } };
+        if (variants[i]) variants[i] = { ...variants[i], score: t.score, factors: t.factors, series: t.series };
+        // Recompute best + average over every take that now has a score.
+        let best = cur.best, bestScore = -Infinity;
+        const scores: number[] = [];
+        variants.forEach((v, idx) => { if (typeof v.score === "number") { scores.push(v.score); if (v.score > bestScore) { bestScore = v.score; best = idx; } } });
+        const average = scores.length ? Math.round((scores.reduce((s, x) => s + x, 0) / scores.length) * 10) / 10 : cur.average;
+        // The BEST badge appears once nothing is generating and every done take is scored.
+        const settled = !variants.some((v) => isInFlight(v.status)) && variants.filter((v) => v.status === "done").every((v) => typeof v.score === "number");
+        return { ...prev, [key]: { ...cur, variants, best, average, scored: settled, scoring: !settled } };
       });
     } catch {
       setRegenJobs((prev) => (prev[key] ? { ...prev, [key]: { ...prev[key], scoring: false } } : prev));
@@ -812,15 +831,21 @@ export default function Home() {
     return () => clearInterval(id);
   }, [regenJobs, updateVariant]);
 
-  // When a batch finishes (nothing in flight) with at least one good take, score
-  // it once (which opens the picker). The autoOpenedRef guard fires this once.
+  // Open the picker the moment the FIRST take is ready, and score each take the
+  // instant it finishes — scores stream in take-by-take instead of waiting for
+  // all three. autoOpenedRef opens the picker once; scoredTakesRef scores each
+  // take once.
   useEffect(() => {
     for (const [key, st] of Object.entries(regenJobs)) {
-      const anyFlight = st.variants.some((v) => isInFlight(v.status));
-      const doneCount = st.variants.filter((v) => v.status === "done").length;
-      if (anyFlight || doneCount === 0 || autoOpenedRef.current.has(key)) continue;
-      autoOpenedRef.current.add(key);
-      void scoreBatch(key);
+      const doneIdx = st.variants.flatMap((v, i) => (v.status === "done" ? [i] : []));
+      if (doneIdx.length === 0) continue;
+      if (!autoOpenedRef.current.has(key)) { autoOpenedRef.current.add(key); setVariantPicker(key); }
+      for (const i of doneIdx) {
+        const tk = `${key}:${i}`;
+        if (scoredTakesRef.current.has(tk)) continue;
+        scoredTakesRef.current.add(tk);
+        void scoreTake(key, i);
+      }
     }
   }, [regenJobs]);
 
@@ -1066,12 +1091,27 @@ export default function Home() {
       const variants = st.variants;
       const stillGenerating = variants.some((v) => isInFlight(v.status));
       const FACTORS: (keyof Factors)[] = ["AUD", "LANG", "ATTN", "VIS"];
+      // The takes regenerate only this slot, so the reference is the ORIGINAL's
+      // engagement over the SAME [start,end] window — not the whole-clip average —
+      // computed as the mean of its four factors across just those frames.
+      const slotMean = (vals: number[]) => {
+        const len = analysis.global.length;
+        if (len < 1 || analysis.duration <= 0) return 0;
+        const i0 = Math.max(0, Math.round((start / analysis.duration) * (len - 1)));
+        const i1 = Math.min(len - 1, Math.round((end / analysis.duration) * (len - 1)));
+        let s = 0, n = 0;
+        for (let k = i0; k <= i1; k += 1) { s += vals[k] ?? 0; n += 1; }
+        return n ? s / n : 0;
+      };
+      const originalSlotScore = analysis.global.length > 1
+        ? Math.round(FAMILY_KEYS.reduce((sum, fk) => sum + slotMean(analysis.cognitiveSeries?.[fk] ?? []), 0) / FAMILY_KEYS.length)
+        : score;
       return <div className="info-backdrop" onClick={() => setVariantPicker(null)}>
         <div className="variant-modal" onClick={(e) => e.stopPropagation()}>
           <div className="info-head">
             <h2>Choose a take · {slot}</h2>
             <div className="variant-head-right">
-              {typeof st.average === "number" && <span className="variant-avg" title="Average headline (mean of the 4 factors) across the takes">avg {st.average} vs original</span>}
+              {analysis.referenceId && <span className="variant-avg" title="The original clip's engagement over THIS slot — the mean of its four factors across just this window. A take scoring higher beat the original here.">Original {originalSlotScore}</span>}
               <button className="icon-button" onClick={() => setVariantPicker(null)} aria-label="Close"><Icon name="close" size={18}/></button>
             </div>
           </div>
