@@ -178,10 +178,7 @@ export default function Home() {
   const [genModel, setGenModel] = useState<RegenProvider>(DEFAULT_REGEN_PROVIDER);
   const [genAgent, setGenAgent] = useState<RegenAgent>(DEFAULT_REGEN_AGENT);
   const [timelineMode, setTimelineMode] = useState<"net" | "split">("net");
-  // Progressive disclosure on the Refine stage: the dense neuroscience (cortical
-  // proxy breakdown + run details + honesty) hides behind a Details toggle, and
-  // the activity feed lives in a drawer — so the brain stays the hero.
-  const [detailsOpen, setDetailsOpen] = useState(false);
+  // The activity feed lives in a drawer so the brain stays the hero.
   const [activityOpen, setActivityOpen] = useState(false);
   // Two-tab flow: Create (Studio) → Refine. Measuring how the brain responds and
   // cutting/regenerating the weak moments now happen together in Refine, in front
@@ -248,15 +245,6 @@ export default function Home() {
 
   const currentIndex = Math.min(analysis.global.length - 1, Math.max(0, Math.round((time / analysis.duration) * (analysis.global.length - 1))));
   const currentIntensity = analysis.global[currentIndex] ?? 0;
-  // Normalized net engagement: rescale the current net (mean across systems)
-  // against this clip's own floor and peak, so 0 = quietest moment, 100 = peak.
-  const normalizedNet = useMemo(() => {
-    const g = analysis.global;
-    if (!g.length) return 0;
-    let min = Infinity, max = -Infinity;
-    for (const v of g) { if (v < min) min = v; if (v > max) max = v; }
-    return max > min ? ((currentIntensity - min) / (max - min)) * 100 : currentIntensity;
-  }, [analysis.global, currentIntensity]);
   const levels = FAMILY_KEYS.map((k) => analysis.cognitiveSeries?.[k]?.[currentIndex] ?? 0);
   const domIdx = levels.reduce((best, v, i) => (v > levels[best] ? i : best), 0);
   const dominant = families[domIdx];
@@ -675,7 +663,7 @@ export default function Home() {
             <line x1={playhead * 240} x2={playhead * 240} y1="0" y2="50" className="time-line"/>
             <defs><linearGradient id="netAreaFill" x1="0" x2="0" y1="0" y2="1"><stop stopColor="var(--chart-fill)" stopOpacity=".22"/><stop offset="1" stopColor="var(--chart-fill)" stopOpacity="0"/></linearGradient></defs>
           </svg>
-          <span className="hero-foot">Four-system peak · live now <b className="tnum">{Math.round(normalizedNet)}</b></span>
+          <span className="hero-foot">Mean of the four systems&apos; peaks</span>
         </div>
 
         {/* The single live annotation — low contrast, bottom-left */}
@@ -687,11 +675,12 @@ export default function Home() {
 
         {/* Systems dock: glanceable rows, tap to reveal anatomy + impact + trace (progressive disclosure) */}
         <aside className="systems-dock" aria-label="Response systems">
-          <div className="dock-head"><span className="eyebrow">Response systems</span><button className={`dock-details-toggle ${detailsOpen ? "on" : ""}`} onClick={() => setDetailsOpen((o) => !o)} aria-expanded={detailsOpen}>Details</button></div>
-          <div className="system-rows">{analysis.regions.map((region, index) => { const family = families.find((item) => item.short === region.short); const live = Math.round((analysis.cognitiveSeries?.[family?.key ?? ""]?.[currentIndex]) ?? 0); const open = index === regionIndex; return <div className={`system-row ${open ? "open" : ""}`} key={region.short}>
-            <button className="system-row-head" onClick={() => setRegionIndex(index)} aria-expanded={open}>
-              <span className="sys-dot" style={{ background: region.color }}/><span className="sys-code">{region.short}</span><span className="sys-name">{region.name}</span><span className="sys-live tnum" style={{ color: region.color }}>{live}</span>
-              <span className="sys-bar"><i style={{ width: `${Math.max(0, Math.min(100, live))}%`, background: region.color }}/></span>
+          <div className="dock-head"><span className="eyebrow">Response systems</span><span className="dock-head-key" aria-hidden>now&nbsp;·&nbsp;avg</span></div>
+          <div className="system-rows">{analysis.regions.map((region, index) => { const family = families.find((item) => item.short === region.short); const series = analysis.cognitiveSeries?.[family?.key ?? ""] ?? region.values; const live = Math.round(series[currentIndex] ?? 0); const avg = series.length ? Math.round(series.reduce((s, v) => s + v, 0) / series.length) : 0; const open = index === regionIndex; return <div className={`system-row ${open ? "open" : ""}`} key={region.short}>
+            <button className="system-row-head" onClick={() => setRegionIndex(index)} aria-expanded={open} aria-label={`${region.name}: now ${live}, average ${avg} out of 100`}>
+              <span className="sys-dot" style={{ background: region.color }}/><span className="sys-code">{region.short}</span><span className="sys-name">{region.name}</span>
+              <span className="sys-stats"><span className="sys-live tnum" style={{ color: region.color }}>{live}</span><span className="sys-avg tnum">{avg}</span></span>
+              <span className="sys-bar" title={`Overall average ${avg} / 100`}><i style={{ width: `${Math.max(0, Math.min(100, avg))}%`, background: region.color }}/></span>
             </button>
             {open && <div className="system-row-body">
               <p className="sys-anatomy">{family?.anatomy}</p>
@@ -699,12 +688,6 @@ export default function Home() {
               <svg className="sys-spark" viewBox="0 0 240 40" preserveAspectRatio="none" aria-hidden><path className="chart-grid" d="M0 20H240"/><path d={linePath(region.values, 240, 38)} fill="none" stroke={region.color} strokeWidth="1.8"/><line x1={playhead * 240} x2={playhead * 240} y1="0" y2="40" className="time-line"/></svg>
             </div>}
           </div>; })}</div>
-          {detailsOpen && <div className="dock-details">
-            <span className="eyebrow">Cortical proxy peak</span>
-            {families.map((f) => { const peak = Math.max(0, ...(analysis.cognitiveSeries?.[f.key] ?? [0])); return <div className="cue-row" key={f.key}><span>{f.name}</span><div><i style={{ width: `${peak}%`, background: f.color }}/></div><b className="tnum">{Math.round(peak)}</b></div>; })}
-            <dl className="dock-run"><div><dt>Model</dt><dd>facebook/tribev2</dd></div><div><dt>Surface</dt><dd>fsaverage5</dd></div><div><dt>Resolution</dt><dd>0.5 s / frame</dd></div><div><dt>Readout</dt><dd>Population average</dd></div></dl>
-            <p className="dock-honesty">Display-only cortical surface summaries, population-average from TRIBE v2 — not a measurement of emotion, intent, memory, subcortical state, or any individual viewer.</p>
-          </div>}
         </aside>
 
         {/* Empty / loading / offline states — calm, on the stage */}
